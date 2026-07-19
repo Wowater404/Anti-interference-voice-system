@@ -1,0 +1,140 @@
+# ===========================================================================
+# 抗干扰语音指令识别流水线 - 配置文件 V3
+# 项目: XH-202615 复杂交互场景的抗干扰语音指令识别技术
+# ===========================================================================
+
+# 音频参数 (datasetA 统一格式)
+audio:
+  sample_rate: 16000          # 采样率 16kHz
+  mono: true                  # 单声道
+  sample_width: 2             # 16-bit PCM
+  format: wav
+
+# ===========================================================================
+# Stage 1: 降噪模型
+# ===========================================================================
+denoise:
+  # 主选: noisereduce — 纯Python降噪, 无需编译, 适合快速验证
+  # 备选: DeepFilterNet3 — 轻量实时, 需Rust编译
+  #       FullSubNet+      — 降噪质量更高但更重
+  model: noisereduce
+  noisereduce:
+    stationary: true            # 静态噪声假设 (适合空调等持续噪声)
+    prop_decrease: 0.8          # 噪声抑制比例 (0-1, 越大抑制越多)
+  deepfilternet3:
+    # 预训练权重自动从 HuggingFace 下载
+    model_dir: null           # null = 自动下载, 或指定本地路径
+    atten_lim_db: 6           # 最大衰减 dB
+  fullsubnet_plus:
+    checkpoint: null           # 指定本地 checkpoint 路径
+  enable: true                 # 是否启用降噪阶段
+
+# ===========================================================================
+# Stage 2: 人声分离 / 目标说话人提取
+# ===========================================================================
+separation:
+  # V3: 16kHz SepFormer 替代 8kHz 版本
+  # 主选: SepFormer-16k (SpeechBrain) — 16kHz原生盲分离, 无降采样
+  #       SepFormer-8k  (已弃用)      — 8kHz盲分离, 降采样导致音质降级
+  #       SpEx+ (WeSep)               — 目标说话人提取, 用声纹参考
+  #       PassThrough                  — 不做分离 (V2行为)
+  model: sepformer16k
+  sepformer16k:
+    # SpeechBrain 预训练模型, 2-speaker separation at 16kHz
+    huggingface_repo: speechbrain/sepformer-whamr16k
+    # WHAMR 数据集: WSJ0-Mix + 噪声 + 混响, 16kHz
+    # SI-SNRi: 13.5 dB, SDRi: 13.0 dB
+  sepformer:
+    # 8kHz 版本 (已弃用, 降采样导致音质降级)
+    huggingface_repo: speechbrain/sepformer-libri2mix
+    sample_rate: 8000          # 原生 8kHz, 需重采样
+  spex_plus:
+    checkpoint: null           # SpEx+ checkpoint路径 (需手动下载)
+    modelscope_model: wenet/wesep_pretrained_models  # ModelScope预训练模型数据集
+    # 目标说话人提取: 输入混合音频 + 目标声纹embedding, 输出目标人声
+  # === 分离策略 (V4.1: 自适应分离+声纹选轨+双阈值) ===
+  enable: true                # V4.1: 自适应分离, 仅对声纹相似度不足的样本启用
+  max_speakers: 2              # 比赛说明: 同一时间最多2个说话人
+  # V4.1 自适应策略 (pipeline.py Step 4-5):
+  #   1. 先算降噪音频声纹相似度 sim_denoised
+  #   2. 仅当 sep_trigger_min <= sim_denoised < vp_threshold 时才分离
+  #   3. 分离后对每条音轨提声纹, 选与 kws 最相似的音轨 (声纹选轨)
+  #   4. 双阈值鉴别: 分离样本用 vp_threshold_separated(0.35), 未分离用 vp_threshold(0.28)
+  #   5. 若分离后最佳相似度仍不如降噪音频, 回退降噪音频
+  # 数据验证: V4.1 Score=0.5452 > V2 Score=0.5404 (CER降0.012, RR不变)
+  vp_threshold_separated: 0.35  # V4.1: 分离样本的接受阈值 (高于正常阈值, 防neg假接受)
+  sep_trigger_min: 0.0          # 分离触发下限 (sim_denoised低于此值时跳过分离, 0=不过滤)
+  # 以下两个开关在自适应模式下忽略 (保留供非自适应实验):
+  voiceprint_use_separated: false # (自适应模式下忽略)
+  asr_use_separated: true         # (自适应模式下忽略)
+
+# ===========================================================================
+# Stage 3: 声纹鉴别
+# ===========================================================================
+voiceprint:
+  # 主选: CAM++ (3DSpeaker/ModelScope) — 阿里开源, 中文场景优化, 国内下载稳定
+  # 备选: ECAPA-TDNN (SpeechBrain)   — VoxCeleb预训练, 需HuggingFace
+  #       WeSpeaker                    — Wenet 团队, 轻量高效
+  model: cam_plus
+  ecapa_tdnn:
+    huggingface_repo: speechbrain/spkrec-ecapa-voxceleb
+    embedding_dim: 192
+  cam_plus:
+    # 3DSpeaker 框架, 需安装 modelscope
+    model_id: iic/speech_campplus_sv_zh-cn_16k-common
+    embedding_dim: 192
+  wespeaker:
+    checkpoint: null
+  # 鉴别阈值: cosine similarity 低于此值则拒识
+  # 优化后: 0.28 (分析显示此阈值下综合得分最优)
+  threshold: 0.28              # 优化值 (原 0.31)
+  enable: true
+
+# ===========================================================================
+# Stage 4: 语音识别 (ASR)
+# ===========================================================================
+asr:
+  # 主选: Paraformer (FunASR) — 阿里开源, 中文识别 SOTA, 非自回归速度快
+  # 备选: Whisper (small/base)  — 多语言, 鲁棒性好但较慢
+  #       SherpaONNX            — ONNX 推理, 极轻量
+  model: paraformer
+  paraformer:
+    # FunASR AutoModel 自动下载
+    model_name: paraformer-zh
+    vad_model: fsmn-vad
+    punc_model: ct-punc
+    hotwords: "空调,洗碗机,灯光,风量,制热,暂停,音量"  # 领域热词
+  whisper:
+    model_size: base           # tiny/base/small
+    language: zh
+  sherpa_onnx:
+    encoder: null
+    decoder: null
+  enable: true
+
+# ===========================================================================
+# 数据集路径
+# ===========================================================================
+dataset:
+  data_root: "F:/挑杯资料/datasetA"
+  pos_jsonl: "pos.jsonl"
+  neg_jsonl: "neg.jsonl"
+  pos_dir: "pos"
+  neg_dir: "neg"
+
+# ===========================================================================
+# 输出配置
+# ===========================================================================
+output:
+  result_dir: "F:/龙虾/2026-07-18-13-57-00/voice_pipeline/results"
+  save_intermediate: false     # 保存中间音频 (降噪后, 分离后) - 关闭以加速
+  intermediate_dir: "F:/龙虾/2026-07-18-13-57-00/voice_pipeline/results/intermediate"
+
+# ===========================================================================
+# 推理设备
+# ===========================================================================
+# FAQ#6: 最终测试使用统一GPU环境 (L20-46G显卡)
+# 本地开发: cpu (CUDA版torch未安装)
+# 提交官方: cuda (L20-46G GPU环境)
+# 设为 auto 则自动检测: 有CUDA用CUDA, 无则用CPU
+device: auto

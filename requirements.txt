@@ -1,0 +1,51 @@
+# ===========================================================================
+# 抗干扰语音指令识别流水线 - 依赖列表
+# 项目: XH-202615 复杂交互场景的抗干扰语音指令识别技术
+# ===========================================================================
+# 安装方式 (在 competition 环境中):
+#   pip install -r requirements.txt
+#
+# 注意: torch 需单独安装, 根据 CUDA 版本选择
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126
+# ===========================================================================
+
+# --- 基础依赖 ---
+numpy>=1.24.0
+scipy>=1.10.0
+PyYAML>=6.0
+
+# --- Stage 1: 降噪模型 ---
+# DeepFilterNet3 (主选, 轻量实时)
+deepfilternet>=0.5.0
+
+# --- Stage 2: 人声分离 ---
+# SpeechBrain (SepFormer + ECAPA-TDNN)
+speechbrain>=1.0.0
+
+# --- Stage 3: 声纹鉴别 ---
+# 3DSpeaker / CAM++ (ModelScope)
+modelscope>=1.9.0
+
+# --- Stage 4: 语音识别 ---
+# FunASR (Paraformer)
+funasr>=1.0.0
+# Whisper (备选)
+openai-whisper>=20231117
+# SherpaONNX (轻量备选)
+sherpa-onnx>=1.10.0
+
+# --- 工具 ---
+tqdm>=4.65.0
+librosa>=0.10.0
+soundfile>=0.12.0
+
+# ===========================================================================
+# 模型说明:
+# ===========================================================================
+# | 阶段     | 主选模型              | 备选模型              | 安装方式          |
+# |----------|----------------------|----------------------|------------------|
+# | 降噪     | DeepFilterNet3       | FullSubNet+          | pip install df   |
+# | 人声分离  | SepFormer(SpeechBrain)| TF-GridNet / SpEx+  | pip install sb   |
+# | 声纹鉴别  | ECAPA-TDNN(SpeechBrain)| CAM++(3DSpeaker)   | pip install sb   |
+# | 语音识别  | Paraformer(FunASR)   | Whisper / SherpaONNX | pip install fun  |
+# ===========================================================================

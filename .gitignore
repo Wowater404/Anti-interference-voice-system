@@ -1,0 +1,26 @@
+# === 模型权重 (2.4GB+, 运行时从 ModelScope/HuggingFace 自动下载) ===
+pretrained/
+
+# === Python 缓存 ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# === 推理结果与日志 (运行产物, 不上传) ===
+results/
+
+# === IDE 配置 ===
+.idea/
+.vscode/
+*.iml
+
+# === 系统文件 ===
+.DS_Store
+Thumbs.db
+
+# === 环境变量 ===
+.env
+.env.local

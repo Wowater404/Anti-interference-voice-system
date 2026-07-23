@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-CAM++ 声纹模型微调训练脚本 V2 (batch加速版)
+CAM++ 声纹模型微调训练脚本 (V3: 双向margin + 1:1平衡采样 + cmd降噪)
 
 训练目标: 说话人验证对比学习
   - pos 样本对 (kws, cmd): 同一说话人 → label=1
   - neg 样本对 (kws, cmd): 不同说话人 → label=0
-  - 损失: CosineEmbeddingLoss(margin=0.2)
+  - 损失: 双向margin损失 (pos只要求sim>0.7, neg要求sim<0.3, 留0.4间隔)
+    - V1用CosineEmbeddingLoss把pos推向cos=1 → embedding塌缩(sim全部膨胀)
+    - V3改用双向margin → 不推向极致, 空间无需塌缩即可满足
 
-V2 性能优化 (V1逐条forward每epoch约45分钟 → V2每epoch约30秒):
+性能优化 (V1逐条forward每epoch约45分钟 → V3每epoch约30秒):
   1. fbank 特征预提取缓存 (多进程, 只做一次)
   2. 固定 NUM_FRAMES=149 帧随机裁剪 (kws全长/cmd随机裁, 每epoch位置随机=天然增强)
   3. kws+cmd 合并真 batch (batch_size=64)
@@ -16,12 +18,17 @@ V2 性能优化 (V1逐条forward每epoch约45分钟 → V2每epoch约30秒):
   1. 冻结主干前半 (head/tdnn/block1/transit1), 只训练后半 (block2起)
   2. 全部 BatchNorm 设 eval (用预训练 running stats, 不被小数据带偏)
   3. 小学习率 1e-4 + 验证集 EER 监控, 保存最佳 checkpoint
-  4. 每 epoch 打印 embedding 跨样本 std, 检测塌缩
+  4. 每 epoch 打印 embedding 跨样本 std, <0.01 自动报警停机
+
+训练/推理分布一致性:
+  - cmd 先降噪 (noisereduce stationary=True prop_decrease=0.8), kws 不降噪
+  - 与 pipeline Step1-2 预处理完全一致, 解决"训练原始/推理降噪"分布不匹配
 
 用法:
   python tools/train_camplus_finetune.py \
       --aug_root "F:/龙虾/2026-07-18-13-57-00/datasetA_aug" \
       --fold 0 --epochs 10 --lr 1e-4 --batch 64 --workers 8
+  # 全量训练: --fold full (val集含在train中, EER监控失效, 仅看趋势)
 """
 import os
 import sys
@@ -65,10 +72,21 @@ SR = 16000
 
 def margin_loss(sim_pos, sim_neg, pos_margin=0.7, neg_margin=0.3):
     """
-    双向margin对比损失 (防塌缩: 不把pos推向cos=1, 避免embedding空间收窄)
-      pos: 只要求 sim > pos_margin(0.7), 不推向1
-      neg: 要求 sim < neg_margin(0.3)
-      pos/neg 之间保持 0.4 间隔, embedding空间无需塌缩即可满足
+    双向margin对比损失 (防塌缩核心: 不把pos推向cos=1, 避免embedding空间收窄)
+
+    原理:
+      - pos对: 只要求 sim > pos_margin(0.7), 超过就不额外奖励 → 不推向1
+      - neg对: 要求 sim < neg_margin(0.3), 低于就不额外惩罚
+      - pos/neg 之间保持 0.4 间隔, embedding空间无需塌缩即可满足
+    对比 CosineEmbeddingLoss: 后者把pos推向cos=1, 导致空间收窄→所有sim膨胀→塌缩
+
+    Args:
+        sim_pos: [B] tensor, pos对的cosine similarity (已经F.normalize)
+        sim_neg: [B] tensor, neg对的cosine similarity
+        pos_margin: float, pos sim的目标下限 (默认0.7)
+        neg_margin: float, neg sim的目标上限 (默认0.3)
+    Returns:
+        loss: scalar tensor, loss_pos + loss_neg
     """
     loss_pos = F.relu(pos_margin - sim_pos).mean()
     loss_neg = F.relu(sim_neg - neg_margin).mean()
@@ -78,6 +96,15 @@ def margin_loss(sim_pos, sim_neg, pos_margin=0.7, neg_margin=0.3):
 # ==================== 模型加载 ====================
 
 def load_camplus_for_train(device):
+    """
+    加载 CAM++ 预训练声纹模型 (通过 ModelScope pipeline)
+
+    Args:
+        device: str, "cuda" 或 "cpu"
+    Returns:
+        wrapper: CAM++ 完整模型对象 (含 preprocessing + embedding_model)
+        emb_model: embedding子模型 (训练时直接调用此对象做forward)
+    """
     from modelscope.pipelines import pipeline
     from modelscope.utils.constant import Tasks
     sv_pipeline = pipeline(
@@ -91,7 +118,19 @@ def load_camplus_for_train(device):
 
 
 def setup_trainable(emb_model):
-    """冻结主干前半 + 全部BN设eval"""
+    """
+    配置可训练参数: 冻结主干前半 + 全部BN设eval
+
+    冻结策略 (防塌缩第1道防线):
+      - 冻结: head, xvector.tdnn, xvector.block1, xvector.transit1 (主干前半)
+      - 可训练: block2及之后的层 (学习领域适配)
+      - BatchNorm全部设eval: 用预训练running stats, 不被小batch数据带偏
+
+    Args:
+        emb_model: CAM++ embedding子模型
+    Returns:
+        trainable_params: list[Parameter], 可训练参数列表 (传给optimizer)
+    """
     for top in FREEZE_MODULES:
         obj = emb_model
         ok = True
@@ -120,9 +159,21 @@ def setup_trainable(emb_model):
 # ==================== fbank 特征缓存 ====================
 
 def _extract_fbank_one(args):
-    """子进程: 提取单个音频的fbank特征
-    与pipeline预处理一致: cmd先降噪(noisereduce stationary=True prop_decrease=0.8), kws不降噪
-    解决训练(原始音频)/推理(降噪音频)分布不匹配导致的neg sim升高问题"""
+    """
+    子进程: 提取单个音频的fbank特征 (与pipeline预处理一致)
+
+    关键: cmd先降噪(kws不降噪), 解决训练(原始音频)/推理(降噪音频)分布不匹配
+    - pipeline Step1: kws用原始音频提声纹
+    - pipeline Step2: cmd先降噪再提声纹
+    - 训练必须匹配: kws fbank=原始, cmd fbank=降噪后
+
+    Args:
+        args: (rel_path, data_root) 元组
+            rel_path: str, 相对于aug_root的音频路径
+            data_root: str, 增强数据集根目录
+    Returns:
+        (rel_path, feat): 路径和 [T, 80] fbank特征 (float32 numpy)
+    """
     rel_path, data_root = args
     y, _ = sf.read(os.path.join(data_root, rel_path), dtype='float32')
     if os.path.basename(rel_path).startswith('cmd_') and _nr_module is not None:
@@ -133,9 +184,15 @@ def _extract_fbank_one(args):
 
 
 class FbankCache:
-    """全部音频的fbank特征内存缓存"""
+    """全部音频的fbank特征内存缓存 (多进程预提取, 训练时零IO)"""
 
     def __init__(self, rel_paths, data_root, workers=8):
+        """
+        Args:
+            rel_paths: list[str], 全部需要缓存的音频相对路径
+            data_root: str, 数据根目录
+            workers: int, 多进程数
+        """
         self.cache = {}
         t0 = time.time()
         with ProcessPoolExecutor(max_workers=workers) as ex:
@@ -149,11 +206,21 @@ class FbankCache:
         print(f"  fbank缓存完成: {len(self.cache)}条, {total_mb:.0f}MB, 耗时{time.time()-t0:.0f}s")
 
     def get(self, rel_path):
+        """获取缓存的fbank特征. Args: rel_path(str). Returns: [T, 80] numpy float32"""
         return self.cache[rel_path]
 
 
 def crop_or_pad(feat, num_frames, rng):
-    """长的随机裁剪, 短的repeat补齐"""
+    """
+    将fbank特征裁剪/补齐到固定帧数 (训练时统一长度)
+
+    Args:
+        feat: [T, 80] numpy, 原始fbank特征
+        num_frames: int, 目标帧数 (默认149, 约1.5s)
+        rng: numpy随机数生成器 (随机裁剪起点, 每epoch不同=天然增强)
+    Returns:
+        [num_frames, 80] numpy
+    """
     T = feat.shape[0]
     if T >= num_frames:
         start = int(rng.integers(0, T - num_frames + 1))
@@ -165,8 +232,15 @@ def crop_or_pad(feat, num_frames, rng):
 # ==================== 数据 ====================
 
 class PairData:
+    """训练/验证数据加载: 从jsonl读取 (kws_path, cmd_path, label) 三元组"""
+
     def __init__(self, jsonl_path):
-        self.records = []  # (kws_path, cmd_path, label)
+        """
+        Args:
+            jsonl_path: str, fold目录下的train.jsonl或val.jsonl
+        """
+        self.records = []  # list of (kws_rel_path, cmd_rel_path, label)
+        # label: 1=pos(同人), 0=neg(不同人)
         with open(jsonl_path, encoding="utf-8") as f:
             for line in f:
                 if not line.strip():
@@ -197,7 +271,23 @@ def make_batch(cache, records, indices, rng, device):
 
 
 def make_pair_batch(cache, pos_records, neg_records, pos_idx, neg_idx, rng, device):
-    """构造1:1平衡batch: [kws_pos(B), cmd_pos(B), kws_neg(B), cmd_neg(B)] → [4B,T,80]"""
+    """
+    构造1:1平衡batch (防塌缩第2道防线: 消除pos拉力优势)
+
+    batch结构: [kws_pos(B), cmd_pos(B), kws_neg(B), cmd_neg(B)] → [4B, T, 80]
+    每步pos和neg各B条, 梯度双向平衡, 防止pos过多把embedding拉向同一方向
+
+    Args:
+        cache: FbankCache, 预提取的特征缓存
+        pos_records: list, pos样本列表 [(kws_path, cmd_path, 1), ...]
+        neg_records: list, neg样本列表 [(kws_path, cmd_path, 0), ...]
+        pos_idx: array, 本batch的pos索引 (B个)
+        neg_idx: array, 本batch的neg索引 (B个, 有放回采样)
+        rng: numpy随机数生成器
+        device: torch device
+    Returns:
+        X: [4B, NUM_FRAMES, 80] tensor, 已做CMN (时间维均值减除)
+    """
     feats = []
     for i in pos_idx:
         feats.append(crop_or_pad(cache.get(pos_records[i][0]), NUM_FRAMES, rng))
@@ -215,6 +305,18 @@ def make_pair_batch(cache, pos_records, neg_records, pos_idx, neg_idx, rng, devi
 # ==================== 评估 ====================
 
 def compute_eer(sims, labels):
+    """
+    计算等错误率 EER (Equal Error Rate)
+
+    EER = FRR=FAR时的错误率, 越低越好
+    遍历所有阈值找FRR+FAR最小的点
+
+    Args:
+        sims: list[float], 全部样本的cosine similarity
+        labels: list[int], 1=pos(同人), 0=neg(不同人)
+    Returns:
+        (best_eer, best_thr): 最佳EER和对应阈值
+    """
     best_eer, best_thr = 1.0, 0.0
     pos_sims = [s for s, l in zip(sims, labels) if l == 1]
     neg_sims = [s for s, l in zip(sims, labels) if l == 0]
@@ -229,7 +331,23 @@ def compute_eer(sims, labels):
 
 @torch.no_grad()
 def validate(emb_model, cache, val_data, device):
-    """验证: 全长特征逐条 (与推理一致)"""
+    """
+    验证集评估: 全长特征逐条计算cosine similarity → EER
+
+    与推理一致: 用全长fbank(不裁剪), CMN后提embedding, 算cosine sim
+
+    Args:
+        emb_model: CAM++ embedding子模型
+        cache: FbankCache, 特征缓存
+        val_data: PairData, 验证集
+        device: torch device
+    Returns:
+        (eer, thr, pos_mean, neg_mean):
+            eer: float, 等错误率
+            thr: float, 最佳阈值
+            pos_mean: float, pos对sim均值 (越高越好, 健康>0.7)
+            neg_mean: float, neg对sim均值 (越低越好, 健康<0.2)
+    """
     emb_model.eval()
     sims, labels = [], []
     for kws_path, cmd_path, label in val_data.records:
@@ -307,37 +425,47 @@ def main():
     for epoch in range(args.epochs):
         t0 = time.time()
         epoch_loss, n_batch = 0.0, 0
-        pos_order = rng.permutation(len(pos_records))
+        pos_order = rng.permutation(len(pos_records))  # pos顺序打乱
 
+        # --- 训练循环: 1:1平衡采样 + 双向margin损失 ---
         for start in range(0, len(pos_order), half):
             pos_idx = pos_order[start:start + half]
             if len(pos_idx) < half:
-                break
-            neg_idx = rng.integers(0, len(neg_records), half)  # 有放回采样
+                break  # 最后不满batch的丢弃
+            neg_idx = rng.integers(0, len(neg_records), half)  # neg有放回采样(数量少于pos)
+
+            # 构造平衡batch: [kws_pos, cmd_pos, kws_neg, cmd_neg] → [4B, T, 80]
             X = make_pair_batch(cache, pos_records, neg_records, pos_idx, neg_idx, rng, device)
-            emb = F.normalize(emb_model(X), dim=1)  # [4B, D]
+            emb = F.normalize(emb_model(X), dim=1)  # [4B, D] L2归一化
+
+            # 拆分embedding: pos对和neg对
             B = len(pos_idx)
-            ek_pos, ec_pos = emb[:B], emb[B:2 * B]
-            ek_neg, ec_neg = emb[2 * B:3 * B], emb[3 * B:]
-            sim_pos = (ek_pos * ec_pos).sum(dim=1)
-            sim_neg = (ek_neg * ec_neg).sum(dim=1)
+            ek_pos, ec_pos = emb[:B], emb[B:2 * B]      # pos: kws_emb, cmd_emb
+            ek_neg, ec_neg = emb[2 * B:3 * B], emb[3 * B:]  # neg: kws_emb, cmd_emb
+
+            # cosine similarity (已归一化, 点积=cos)
+            sim_pos = (ek_pos * ec_pos).sum(dim=1)  # [B]
+            sim_neg = (ek_neg * ec_neg).sum(dim=1)  # [B]
+
+            # 双向margin损失
             loss = margin_loss(sim_pos, sim_neg, args.pos_margin, args.neg_margin)
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(trainable_params, 5.0)
+            torch.nn.utils.clip_grad_norm_(trainable_params, 5.0)  # 梯度裁剪防爆
             optimizer.step()
             epoch_loss += loss.item()
             n_batch += 1
 
-        scheduler.step()
+        scheduler.step()  # 余弦退火
 
-        # 塌缩监控
+        # --- 塌缩监控: 检查embedding跨样本方差 ---
         with torch.no_grad():
             idx = rng.choice(len(train_data), min(64, len(train_data)), replace=False)
             X, _ = make_batch(cache, train_data.records, idx, rng, device)
             e = F.normalize(emb_model(X), dim=1)
-            emb_std = float(e.std(dim=0).mean().item())
+            emb_std = float(e.std(dim=0).mean().item())  # 跨样本std, <0.01=塌缩
 
+        # --- 验证集评估 ---
         eer, thr, pm, nm = validate(emb_model, cache, val_data, device)
         dt = time.time() - t0
         improved = eer < best_eer

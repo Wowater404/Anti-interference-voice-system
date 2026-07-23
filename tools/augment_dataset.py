@@ -47,16 +47,32 @@ AUG_TYPES = [
 
 
 def gain_db(y, db):
-    """音量调整: 增益 db"""
+    """
+    音量调整: 增益指定dB
+    Args:
+        y: [N] float32 numpy, 音频波形
+        db: float, 增益分贝 (正=放大, 负=衰减)
+    Returns:
+        [N] float32 numpy, 增益后的波形
+    """
     return y * (10.0 ** (db / 20.0))
 
 
 def _sig_power(y):
+    """计算信号功率 (均方值). Args: y:[N]numpy. Returns: float"""
     return float(np.mean(y ** 2)) + 1e-12
 
 
 def add_white_noise(y, snr_db, rng):
-    """按目标 SNR 叠加白噪声"""
+    """
+    按目标SNR叠加白噪声
+    Args:
+        y: [N] float32, 原始音频
+        snr_db: float, 目标信噪比(dB), 越低噪声越大
+        rng: numpy随机数生成器
+    Returns:
+        [N] float32, 加噪后的音频
+    """
     noise = rng.standard_normal(len(y)).astype(np.float32)
     scale = np.sqrt(_sig_power(y) / (10.0 ** (snr_db / 10.0)) / _sig_power(noise))
     return y + noise * scale
@@ -74,14 +90,30 @@ def _pink_noise(n, rng):
 
 
 def add_pink_noise(y, snr_db, rng):
-    """按目标 SNR 叠加粉噪声 (低频能量多, 更接近环境/家电噪声)"""
+    """
+    按目标SNR叠加粉噪声 (低频能量多, 更接近环境/家电噪声)
+    Args:
+        y: [N] float32, 原始音频
+        snr_db: float, 目标信噪比(dB)
+        rng: numpy随机数生成器
+    Returns:
+        [N] float32, 加噪后的音频
+    """
     noise = _pink_noise(len(y), rng)
     scale = np.sqrt(_sig_power(y) / (10.0 ** (snr_db / 10.0)) / _sig_power(noise))
     return y + noise * scale
 
 
 def random_crop(y, keep_ratio, rng):
-    """随机片段截取: 保留 keep_ratio 比例, 随机起点"""
+    """
+    随机片段截取: 保留keep_ratio比例, 随机起点 (模拟不完整发音)
+    Args:
+        y: [N] float32, 原始音频
+        keep_ratio: float, 保留比例 (0-1, kws=0.90, cmd=0.80)
+        rng: numpy随机数生成器
+    Returns:
+        [keep_N] float32, 截取后的音频
+    """
     keep = int(len(y) * keep_ratio)
     if keep >= len(y):
         return y
@@ -90,12 +122,29 @@ def random_crop(y, keep_ratio, rng):
 
 
 def pitch_shift(y, n_steps):
-    """变声: 音高平移 n_steps 个半音 (不改变时长)"""
+    """
+    变声: 音高平移n_steps个半音 (不改变时长, 模拟不同音色/性别)
+    Args:
+        y: [N] float32, 原始音频
+        n_steps: float, 半音数 (正=升高, 负=降低)
+    Returns:
+        [N] float32, 变声后的音频
+    """
     return librosa.effects.pitch_shift(y.astype(np.float32), sr=SR, n_steps=n_steps)
 
 
 def apply_aug(y, aug_type, kind, rng):
-    """对单个音频应用增强. kind: 'kws'/'cmd' (截取比例不同)"""
+    """
+    对单个音频应用指定类型的增强
+
+    Args:
+        y: [N] float32, 原始音频波形
+        aug_type: str, 增强类型名 (对应AUG_TYPES中的第一列)
+        kind: str, 'kws' 或 'cmd' (截取比例不同: kws保留90%, cmd保留80%)
+        rng: numpy随机数生成器
+    Returns:
+        [M] float32, 增强后的音频波形 (长度可能变化, 如截取)
+    """
     for name, fn, param in AUG_TYPES:
         if name != aug_type:
             continue
@@ -116,10 +165,27 @@ def apply_aug(y, aug_type, kind, rng):
 
 
 def process_one_sample(args):
-    """处理一条样本: 对 (kws, cmd) 生成全部 8 种增强, 返回 jsonl 记录列表"""
+    """
+    处理一条样本: 对(kws, cmd)成对生成全部8种增强, 返回jsonl记录列表
+
+    关键: kws和cmd使用同一种增强类型, 保持声纹配对关系
+    (同一增强类型的kws和cmd组成一对, 用于对比学习训练)
+
+    Args:
+        args: (src_root, dst_root, split, rec) 元组
+            src_root: str, 原始数据集根目录
+            dst_root: str, 增强输出根目录
+            split: str, 'pos' 或 'neg'
+            rec: dict, 原始jsonl记录 (含id/唤醒音频/识别音频/唤醒文本/识别文本)
+    Returns:
+        (split, records): split名和8条增强记录列表
+        每条记录: {id, orig_id, 唤醒音频, 唤醒文本, 识别音频, 识别文本, aug_type}
+    """
     src_root, dst_root, split, rec = args
+    # 用orig_id做随机种子, 保证同一样本每次增强结果一致 (可复现)
     rng = np.random.default_rng(seed=rec["id"] * 1000 + (0 if split == "pos" else 7))
 
+    # 加载原始kws和cmd音频, 统一重采样到16kHz
     kws_src = os.path.join(src_root, rec["唤醒音频"])
     cmd_src = os.path.join(src_root, rec["识别音频"])
     y_kws, _ = librosa.load(kws_src, sr=SR, mono=True)
@@ -130,13 +196,14 @@ def process_one_sample(args):
 
     records = []
     for ai, (aug_type, _, _) in enumerate(AUG_TYPES):
-        # kws 与 cmd 使用同一种增强, 保持配对关系
+        # kws与cmd使用同种增强, 保持配对
         y_k = apply_aug(y_kws, aug_type, "kws", rng)
         y_c = apply_aug(y_cmd, aug_type, "cmd", rng)
-        # 防削波
+        # 防削波: 限幅到[-1, 1]
         y_k = np.clip(y_k, -1.0, 1.0).astype(np.float32)
         y_c = np.clip(y_c, -1.0, 1.0).astype(np.float32)
 
+        # 输出文件名: 原始名_增强类型.wav
         base = os.path.basename(rec["唤醒音频"]).replace(".wav", "")
         cbase = os.path.basename(rec["识别音频"]).replace(".wav", "")
         kws_rel = f"{split}/{base}_{aug_type}.wav"
@@ -144,9 +211,10 @@ def process_one_sample(args):
         sf.write(os.path.join(dst_root, kws_rel), y_k, SR, subtype="PCM_16")
         sf.write(os.path.join(dst_root, cmd_rel), y_c, SR, subtype="PCM_16")
 
+        # 新id = 原id×100 + 增强序号 (保证唯一且可追溯orig_id)
         records.append({
             "id": rec["id"] * 100 + ai,
-            "orig_id": rec["id"],
+            "orig_id": rec["id"],       # 原始样本id (五折划分按此防泄漏)
             "唤醒音频": kws_rel,
             "唤醒文本": rec["唤醒文本"],
             "识别音频": cmd_rel,

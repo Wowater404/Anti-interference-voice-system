@@ -151,23 +151,38 @@ class VoicePipeline:
         sample_id: str = ""
     ) -> Dict:
         """
-        处理单条样本: 完整流水线推理
+        处理单条样本: 完整流水线推理 (4阶段: 降噪→分离→声纹鉴别→ASR)
+
+        Pipeline流程 (V5.1):
+          Step 0: 加载kws+cmd音频 (16kHz mono)
+          Step 1: 从kws提取参考声纹 embedding [192]
+          Step 2: 对cmd降噪 (noisereduce, stationary=True, prop_decrease=0.8)
+          Step 3: 从降噪后cmd提取声纹, 算与kws的cosine相似度 sim_denoised
+          Step 4: 选择性分离: 仅当 0.50<=sim_denoised<0.67 时触发
+                  - 分离后选最相似音轨 (跳变>0.25不信任)
+                  - sim>=0.67或<0.50的样本不分离
+          Step 5: 双阈值鉴别:
+                  - 未分离: sim>=0.67 接受
+                  - 分离后: sim>=0.80 接受 (高阈值防neg假接受)
+          Step 6: ASR识别 (Paraformer, 输出去标点)
+                  - 接受: 识别目标说话人音频→文本
+                  - 拒识: 输出空字符串"" (比赛FAQ#8: 删除错误)
 
         Args:
-            kws_path: 唤醒音频路径
-            cmd_path: 识别音频路径
-            label: 真实标签 (评估用, 推理时可为 None)
-            sample_id: 样本ID
+            kws_path: str, 唤醒音频文件路径 (WAV, 16kHz)
+            cmd_path: str, 识别音频文件路径 (WAV, 16kHz)
+            label: str, 可选, 真实标签文本 (评估时用于算CER, 推理时为None)
+            sample_id: str, 样本ID (用于中间文件命名和结果追踪)
 
         Returns:
             dict: {
-                "id": sample_id,
-                "content": 识别文本或 "null",
-                "label": 真实标签,
-                "cer": CER值,
-                "similarity": 声纹相似度,
-                "is_target": 是否接受,
-                "stages": 各阶段耗时
+                "id": sample_id,           # 样本ID
+                "content": str,             # 识别文本 (拒识时为"")
+                "label": label,             # 真实标签 (评估用)
+                "cer": float or None,       # CER (有label时计算, 否则None)
+                "similarity": float,        # 声纹cosine相似度 (最终判定依据)
+                "is_target": bool,          # 是否接受为目标说话人
+                "stages": dict,             # 各阶段耗时 {load:float, voiceprint_extract:float, ...}
             }
         """
         if not self._models_loaded:

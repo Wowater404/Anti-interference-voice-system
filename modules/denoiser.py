@@ -210,7 +210,17 @@ class NoiseReduceDenoiser(BaseDenoiser):
             self._loaded = True
 
     def denoise(self, audio: np.ndarray, sr: int = 16000) -> np.ndarray:
-        """noisereduce 降噪"""
+        """
+        noisereduce 降噪 (频谱门限法)
+
+        Args:
+            audio: np.ndarray [N] 或 [N, 1], float32, 原始音频波形, 值域[-1,1]
+            sr: int, 采样率 (默认16000)
+
+        Returns:
+            np.ndarray [N], float32, 降噪后音频波形, 值域[-1,1]
+            (若noisereduce未安装则直通返回原始音频)
+        """
         if not self._loaded:
             self.load()
 

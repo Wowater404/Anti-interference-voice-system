@@ -22,11 +22,13 @@ from collections import defaultdict
 
 
 def load_jsonl(path):
+    """加载jsonl文件. Args: path(str). Returns: list[dict]"""
     with open(path, encoding="utf-8") as f:
         return [json.loads(l) for l in f if l.strip()]
 
 
 def write_jsonl(path, records):
+    """写出jsonl文件. Args: path(str), records(list[dict])"""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         for r in records:
@@ -34,6 +36,15 @@ def write_jsonl(path, records):
 
 
 def main():
+    """
+    五折交叉验证划分主流程
+
+    划分逻辑:
+      1. 按 orig_id 分组 (同一样本的8种增强版本必须在同一折, 防数据泄漏)
+      2. pos/neg 分别按 orig_id 均匀分到5折 (分层抽样保持比例)
+      3. 每折的 train = 其他4折的全部增强版本 (含8种增强)
+      4. 每折的 val = 本折的原始版本 (aug_type=orig, 保证验证干净无增强污染)
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--aug_root", required=True, help="增强数据集根目录 (含 pos_aug.jsonl/neg_aug.jsonl)")
     ap.add_argument("--n_folds", type=int, default=5)
@@ -44,8 +55,9 @@ def main():
     pos = load_jsonl(os.path.join(args.aug_root, "pos_aug.jsonl"))
     neg = load_jsonl(os.path.join(args.aug_root, "neg_aug.jsonl"))
 
-    # 按 orig_id 分组
+    # 按 orig_id 分组: 同一orig_id的所有增强版本归为一组
     def group_by_orig(records):
+        """按orig_id分组. Returns: dict[orig_id → list[record]]"""
         groups = defaultdict(list)
         for r in records:
             groups[r["orig_id"]].append(r)
@@ -70,16 +82,18 @@ def main():
 
     summary = {"n_folds": args.n_folds, "seed": args.seed, "folds": []}
     for k in range(args.n_folds):
+        # 本折验证集的orig_id集合
         val_pos_ids = set(pos_fold_ids[k])
         val_neg_ids = set(neg_fold_ids[k])
 
         train_recs, val_recs = [], []
+        # pos: val折只取原始版本, 其余折取全部增强版本
         for oid, recs in pos_groups.items():
             if oid in val_pos_ids:
-                # 验证集只放原始版本
                 val_recs.extend([r for r in recs if r["aug_type"] == "orig"])
             else:
                 train_recs.extend(recs)
+        # neg: 同上
         for oid, recs in neg_groups.items():
             if oid in val_neg_ids:
                 val_recs.extend([r for r in recs if r["aug_type"] == "orig"])

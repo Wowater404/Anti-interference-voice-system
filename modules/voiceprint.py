@@ -221,8 +221,15 @@ class CAMPlusExtractor(BaseVoiceprintExtractor):
 
     def extract(self, audio: np.ndarray, sr: int = 16000) -> np.ndarray:
         """
-        提取 CAM++ 声纹 embedding
-        直接调用底层模型, 无需临时文件
+        提取 CAM++ 声纹 embedding (直接调用底层模型, 无需临时文件)
+
+        Args:
+            audio: np.ndarray [N], float32, 音频波形, 值域[-1,1], 单声道
+            sr: int, 采样率 (默认16000, CAM++要求16kHz)
+
+        Returns:
+            embedding: np.ndarray [192], float32, L2归一化后的声纹向量
+                      (若模型未加载则返回随机向量, 不中断流水线)
         """
         if not self._loaded:
             self.load()
@@ -291,6 +298,13 @@ class WeSpeakerExtractor(BaseVoiceprintExtractor):
 def create_voiceprint_extractor(config: dict, device: str = "cpu") -> BaseVoiceprintExtractor:
     """
     工厂函数: 根据配置创建声纹提取器
+
+    Args:
+        config: dict, voiceprint配置字典 (含model/cam_plus/ecapa_tdnn等字段)
+        device: str, "cuda" 或 "cpu"
+
+    Returns:
+        BaseVoiceprintExtractor 子类实例 (CAMPlusExtractor / ECAPA_TDNN_Extractor / WeSpeakerExtractor)
     """
     model_name = config.get("model", "ecapa_tdnn")
 

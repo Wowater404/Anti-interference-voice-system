@@ -172,13 +172,17 @@ class CAMPlusExtractor(BaseVoiceprintExtractor):
 
     def __init__(self, device: str = "cpu",
                  model_id: str = "iic/speech_campplus_sv_zh-cn_16k-common",
-                 embedding_dim: int = 192):
+                 embedding_dim: int = 192,
+                 finetuned_path: Optional[str] = None):
         super().__init__(device)
         self.model_id = model_id
         self.embedding_dim = embedding_dim
+        # 微调权重路径 (datasetA增强数据对比学习微调, tools/train_camplus_finetune.py 产出)
+        # 为 None 时使用官方预训练权重 (zero-shot)
+        self.finetuned_path = finetuned_path
 
     def load(self):
-        """加载 CAM++ 模型 (通过 ModelScope pipeline)"""
+        """加载 CAM++ 模型 (通过 ModelScope pipeline, 可选加载微调权重)"""
         try:
             from modelscope.pipelines import pipeline
             from modelscope.utils.constant import Tasks
@@ -192,6 +196,21 @@ class CAMPlusExtractor(BaseVoiceprintExtractor):
             self.pipeline = sv_pipeline
             self._loaded = True
             print(f"[CAM++] 模型加载成功 (threshold={sv_pipeline.thr})")
+
+            # 加载微调权重 (覆盖 embedding_model)
+            if self.finetuned_path:
+                # 相对路径解析为项目根目录相对 (避免依赖运行目录)
+                ft_path = self.finetuned_path
+                if not os.path.isabs(ft_path):
+                    ft_path = os.path.join(PROJECT_ROOT, ft_path)
+                if os.path.exists(ft_path):
+                    import torch
+                    state = torch.load(ft_path, map_location="cpu")
+                    self.model.embedding_model.load_state_dict(state, strict=True)
+                    self.model.embedding_model.eval()
+                    print(f"[CAM++] 已加载微调权重: {ft_path}")
+                else:
+                    print(f"[CAM++] 警告: 微调权重不存在 {ft_path}, 使用预训练权重")
         except ImportError as e:
             print(f"[CAM++] 警告: modelscope 导入失败 ({e}), 使用直通模式")
             print("  可能缺少依赖, 尝试: pip install addict datasets simplejson")
@@ -202,8 +221,15 @@ class CAMPlusExtractor(BaseVoiceprintExtractor):
 
     def extract(self, audio: np.ndarray, sr: int = 16000) -> np.ndarray:
         """
-        提取 CAM++ 声纹 embedding
-        直接调用底层模型, 无需临时文件
+        提取 CAM++ 声纹 embedding (直接调用底层模型, 无需临时文件)
+
+        Args:
+            audio: np.ndarray [N], float32, 音频波形, 值域[-1,1], 单声道
+            sr: int, 采样率 (默认16000, CAM++要求16kHz)
+
+        Returns:
+            embedding: np.ndarray [192], float32, L2归一化后的声纹向量
+                      (若模型未加载则返回随机向量, 不中断流水线)
         """
         if not self._loaded:
             self.load()
@@ -272,6 +298,13 @@ class WeSpeakerExtractor(BaseVoiceprintExtractor):
 def create_voiceprint_extractor(config: dict, device: str = "cpu") -> BaseVoiceprintExtractor:
     """
     工厂函数: 根据配置创建声纹提取器
+
+    Args:
+        config: dict, voiceprint配置字典 (含model/cam_plus/ecapa_tdnn等字段)
+        device: str, "cuda" 或 "cpu"
+
+    Returns:
+        BaseVoiceprintExtractor 子类实例 (CAMPlusExtractor / ECAPA_TDNN_Extractor / WeSpeakerExtractor)
     """
     model_name = config.get("model", "ecapa_tdnn")
 
@@ -288,6 +321,7 @@ def create_voiceprint_extractor(config: dict, device: str = "cpu") -> BaseVoicep
             device=device,
             model_id=cfg.get("model_id", "iic/speech_campplus_sv_zh-cn_16k-common"),
             embedding_dim=cfg.get("embedding_dim", 192),
+            finetuned_path=cfg.get("finetuned_path"),
         )
     elif model_name == "wespeaker":
         cfg = config.get("wespeaker", {})

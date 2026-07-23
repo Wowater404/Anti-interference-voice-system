@@ -2,7 +2,7 @@
 
 > **项目**: XH-202615 复杂交互场景的抗干扰语音指令识别技术
 > **发榜单位**: 美的集团
-> **当前版本**: V4.1（自适应分离 + 声纹选轨 + 双阈值鉴别）
+> **当前版本**: V5（微调声纹 + 禁分离）
 
 ## 架构概览
 
@@ -14,198 +14,112 @@
   提取参考声纹                   noisereduce (谱减法)
        │                                │
        │ kws_embedding                  ▼ denoised_audio
-       │                       [CAM++ ②] 算 sim_denoised
+       │                       [CAM++ ②] 提声纹
        │                                │
-       │                     <sim_denoised < 0.28 ?>
+       │                     sim = cos(kws_emb, cmd_emb)
+       │                                │
+       │                     <sim >= 0.67 (微调阈值) ?>
        │                     ╱              ╲
-       │              否(直接用)           是(自适应分离)
+       │              是(目标说话人)      否(拒识)
        │                     │              │
-       │                     │     [Stage 2: SepFormer-16k]
-       │                     │     盲分离 → 多条音轨
-       │                     │              │
-       │                     │     [CAM++ ③] 声纹选轨
-       │                     │     选与 kws 最相似的音轨
-       │                     ╲              ╱
-       │                      ▼ best_audio
-       │                [Stage 3: 声纹鉴别]
-       │                双阈值: 未分离≥0.28 / 分离过≥0.35
-       │                    ╱              ╲
-       │              reject              accept
-       │                 ╱                    ╲
-       │         [输出: ""]          [Stage 4: ASR]
-       │                          Paraformer (FunASR)
-       │                                  │
-       │                                  ▼
-       └───────────────────────  [输出: 识别文本(去标点)]
+       │                     ▼              ▼
+       │              [Stage 2: ASR]    content = ""
+       │              Paraformer
+       │                     │
+       └──────────────►  content (识别文本)
 ```
 
-**核心设计**: 声纹模型 (CAM++) 不是末端单一关卡, 而是贯穿流程的决策中枢 —— ①提取参考声纹 ②决策是否分离 ③选轨+最终鉴别。
+**V5 与 V4.1 的核心差异**：CAM++ 声纹模型用 datasetA 增强数据微调，且**禁用分离**。
+微调模型本身够强（pos sim 0.8+），不需要分离救回；分离选轨反而放大 neg 假接受
+（fold_0 验证折实测：降噪音频假接受 6/95，加分离后假接受 30/95）。
 
-## 比赛评分标准
+## 性能对比（fold_0 验证折，无偏）
 
-| 指标 | 权重 | 说明 |
-|------|------|------|
-| CER (字错率) | 40% | 在 pos 正样本上评估, 越低越好 |
-| RR (拒识率) | 40% | 在 neg 负样本上评估, 越高越好 |
-| 推理效率 | 20% | 推理时间 10% + 内存占用 10% |
+| 配置 | CER | RR | pos接受 | neg假接受 | Score |
+|------|-----|-----|---------|----------|-------|
+| V4.1 基线（预训练+自适应分离） | 0.6071 | 0.9579 | 175/273 | 4/95 | 0.5403 |
+| **V5 微调 + 禁分离** | **0.4527** | 0.9368 | **242/273** | 6/95 | **0.5936** |
 
-**官方 CER 计算**: NFKC 归一化 + lowercase + 全 Unicode P* 标点过滤 + editdistance + micro-average; 拒识样本输出空字符串 `""` (按删除错误计)。
+Score 提升 **+0.053**（相对 +9.8%）：CER 大降 0.154（多救回 67 条 pos），RR 仅微降 0.021。
 
-## 当前性能 (V4.1, datasetA)
+## 微调声纹模型（V5 核心）
 
-| 指标 | V2 (无分离) | V4 (分离 t=0.28) | **V4.1 (双阈值)** |
-|------|------------|-----------------|-------------------|
-| CER (micro) | 0.5857 | 0.5615 | **0.5738** |
-| RR | 0.9367 | 0.9051 | **0.9367** |
-| Score (CER40+RR40) | 0.5404 | 0.5374 | **0.5452** |
-| Pos 接受数 | 900 | 948 | 913 |
+CAM++ 用 datasetA 增强数据对比学习微调，训练方法（V3，防塌缩）：
 
-V4.1 相比 V2: CER 降 0.012, RR 不变, Score 提升 +0.0048。
+- **数据增强**（`tools/augment_dataset.py`）：每条样本 8 倍增强
+  （原始 / 音量±4dB / 白噪声SNR15 / 粉噪声SNR20 / 片段截取 / 变声±半音），
+  pos 1364→10912 条，neg 474→3792 条
+- **五折交叉验证**（`tools/make_folds.py`）：按 orig_id 划分防泄漏，val 仅用原始音频
+- **双向 margin 损失**：pos>0.7, neg<0.3，留 0.4 间隔——不把 pos 推向 cos=1，避免 embedding 塌缩
+- **1:1 平衡采样**：消除 pos 拉力优势
+- **预处理一致**：kws 原始 + cmd 降噪，与 pipeline 推理完全一致（解决分布不匹配）
+- **防塌缩**：冻结主干前半 + 全部 BN 设 eval + lr=1e-4 + EER 监控
 
-## 模型清单与下载
-
-模型权重不随仓库上传 (2.4GB), 首次运行时自动下载到 `pretrained/` 目录:
-
-| 阶段 | 模型 | 来源 | 模型 ID |
-|------|------|------|---------|
-| 降噪 | noisereduce | pip 包 | `pip install noisereduce` |
-| 分离 | SepFormer-16k | HuggingFace | `speechbrain/sepformer-whamr16k` |
-| 声纹 | CAM++ | ModelScope | `iic/speech_campplus_sv_zh-cn_16k-common` |
-| ASR | Paraformer | ModelScope | `iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch` |
-| VAD | FSMN-VAD | ModelScope | `iic/speech_fsmn_vad_zh-cn-16k-common-pytorch` |
-| 标点 | ct-punc | ModelScope | `iic/punc_ct-transformer_cn-en-common-vocab471067-large` |
-
-> 比赛环境网络受限时, 提前在本地运行一次推理完成下载, 再将 `pretrained/` 目录拷贝到比赛服务器。
+模型：`finetuned_models/camplus_v3_fold0.pt`（见该目录 README）
 
 ## 快速开始
 
-### 1. 环境安装
-
 ```bash
-# Python 3.10+ 推荐
-conda create -n voice_pipeline python=3.10
-conda activate voice_pipeline
-
-# 安装 PyTorch (根据 CUDA 版本, CPU 版如下)
-pip install torch torchaudio
-
-# 安装依赖
+# 1. 安装依赖
 pip install -r requirements.txt
+
+# 2. 单样本推理
+python run_inference.py --kws "path/to/kws.wav" --cmd "path/to/cmd.wav" --label "指令文本"
+
+# 3. 批量推理 (datasetA)
+python run_inference.py --data_root "path/to/datasetA" --split all \
+    --output results/output.json --checkpoint results/ckpt.json
 ```
 
-### 2. 配置
+首次运行自动从 ModelScope/HuggingFace 下载预训练模型到 `pretrained/`（约 2GB），
+微调权重从 `finetuned_models/` 加载（已随仓库提供）。
 
-编辑 `configs/default.yaml`:
-
-```yaml
-# 关键配置项
-voiceprint:
-  threshold: 0.28              # 声纹鉴别阈值 (未分离样本)
-  threshold_separated: 0.35    # 分离后样本阈值 (V4.1 双阈值)
-
-separation:
-  enable: true                 # 启用自适应分离
-  max_speakers: 2
-  sep_trigger_min: 0.0         # 分离触发下限 (可调高以跳过低相似度样本)
-
-device: auto                   # auto/cpu/cuda
-```
-
-### 3. 批量推理
+## 重新训练微调模型（可选）
 
 ```bash
-# 处理所有样本 (pos + neg)
-python run_inference.py \
-    --data_root "/path/to/datasetA" \
-    --split all \
-    --output results/full_inference.json \
-    --checkpoint results/checkpoint.json
+# 1. 数据增强
+python tools/augment_dataset.py --src "path/to/datasetA" --dst "path/to/datasetA_aug" --workers 8
 
-# 仅正样本 (测 CER)
-python run_inference.py --data_root "/path/to/datasetA" --split pos
+# 2. 五折划分
+python tools/make_folds.py --aug_root "path/to/datasetA_aug" --n_folds 5
 
-# 仅负样本 (测 RR)
-python run_inference.py --data_root "/path/to/datasetA" --split neg
+# 3. 训练 (fold_0)
+python tools/train_camplus_finetune.py --aug_root "path/to/datasetA_aug" \
+    --fold 0 --epochs 10 --batch 64 --workers 8
+
+# 4. 验证折无偏评估
+python tools/eval_fold0_nosep.py
 ```
 
-支持断点续传: 中断后重新运行相同命令, 自动从 checkpoint 恢复。
-
-### 4. 输出格式
-
-```json
-{
-    "result": {
-        "results": [
-            {"id": "0", "content": "空调开到制热调到二十五度", "label": "空调开到制热调到二十五度风量调到百分之三十", "cer": "0.125"}
-        ],
-        "final_cer": "0.5738",
-        "duration": "1064.29"
-    },
-    "metrics": {
-        "rejection_rate": "0.9367",
-        "final_score": "0.5452",
-        "pos_count": 1364,
-        "neg_count": 474
-    }
-}
-```
-
-## 项目结构
+## 目录结构
 
 ```
 voice_pipeline/
-├── configs/
-│   └── default.yaml           # 流水线配置 (模型/阈值/分离策略)
-├── modules/
-│   ├── denoiser.py            # Stage 1: 降噪 (noisereduce)
-│   ├── separator.py           # Stage 2: 人声分离 (SepFormer-16k)
-│   ├── voiceprint.py          # Stage 3: 声纹提取 (CAM++)
-│   └── asr.py                 # Stage 4: 语音识别 (Paraformer)
-├── utils/
-│   ├── audio.py               # 音频I/O + 预处理 (归一化/去静音/去标点)
-│   └── metrics.py             # 评估指标 (CER, RR)
-├── config.py                  # 配置加载器
-├── pipeline.py                # 流水线编排器 (V4.1 核心逻辑)
-├── run_inference.py           # 推理入口 (支持断点续传)
-├── analyze_dataset.py         # 数据集分析
-├── analyze_v2.py              # V2 结果分析
-├── analyze_v4.py              # V4 vs V2 对比分析
-├── requirements.txt           # 依赖列表
-└── README.md                  # 本文件
+├── run_inference.py      # 推理入口
+├── pipeline.py           # 流水线核心 (降噪→声纹→ASR)
+├── config.py             # 配置加载
+├── configs/default.yaml  # 配置 (微调权重+阈值0.67+禁分离)
+├── modules/              # 模型模块
+│   ├── denoiser.py       #   降噪 (noisereduce)
+│   ├── separator.py      #   分离 (SepFormer, V5已禁用)
+│   ├── voiceprint.py     #   声纹 (CAM++, 支持微调权重)
+│   └── asr.py            #   ASR (Paraformer)
+├── utils/                # 音频/指标工具
+├── tools/                # 数据增强/训练/评估脚本
+├── finetuned_models/     # 微调声纹模型 (随仓库提供)
+├── pretrained/           # 预训练模型 (运行时下载, 不上传)
+└── results/              # 推理结果 (不上传)
 ```
 
-## V4.1 核心机制
+## 比赛评分
 
-### 自适应分离
-仅当降噪音频声纹相似度 `sim_denoised < 0.28` (即 V2 会拒识的样本) 才触发分离, 避免分离 artifact 污染已能正确识别的样本。
+- **CER 40%**: pos 样本字错误率（micro-average，拒识按删除错误）
+- **RR 40%**: neg 样本拒识率
+- **效率 20%**: 推理时间 10% + 内存 10%（禁分离比 V4.1 省时约 27%）
 
-### 声纹辅助选轨
-SepFormer 是盲分离, 不知道哪条音轨是目标说话人。对分离出的每条音轨提声纹, 选与 kws 参考声纹 cosine 相似度最高的音轨。修复了早期版本用"能量法"选轨 (选声音最大的音轨, 往往是噪声) 的缺陷。
+## 历史版本
 
-### 双阈值鉴别
-- 未分离样本: `sim ≥ 0.28` 接受
-- 分离过的样本: `sim ≥ 0.35` 接受 (分离可能提升干扰人的相似度, 需更严格阈值)
-
-## 模型替换指南
-
-各模块通过工厂模式创建, 替换模型只需:
-1. 在 `modules/` 下新增子类, 实现 `load()` + 核心方法
-2. 在 `configs/default.yaml` 修改对应 `model` 字段
-
-**接口契约** (所有模块共享的音频格式: `np.ndarray, float32, [-1,1], 16kHz, 单声道`):
-- 降噪: `denoise(audio, sr) → audio`
-- 分离: `separate(audio, sr) → (best_audio, sources[])`
-- 声纹: `extract(audio, sr) → embedding (L2归一化)`
-- ASR: `transcribe(audio, sr) → str`
-
-**注意事项**:
-- 换声纹模型后, 阈值必须重新校准 (不同模型相似度分布不同)
-- 换分离模型时, 若是目标说话人提取 (如 SpEx+), 不需要选轨, pipeline 逻辑需调整
-- 换 ASR 模型时注意输入形式 (Paraformer 需临时 WAV 文件, Whisper 可直接接受 numpy)
-- 比赛环境为 L20-46G GPU, 确保模型支持 CUDA 推理
-
-## 已知问题与优化方向
-
-1. **推理效率**: V4.1 耗时 1064s (V2 为 423s), 因 907/1838 样本触发分离但仅 13 个受益。可调高 `sep_trigger_min` 跳过低相似度 neg 样本的无效分离
-2. **SepFormer 内部选轨缺陷**: `separator.py` 的 `_select_best_match` 用能量法, 已在 pipeline 层用声纹选轨绕过
-3. **目标说话人提取**: 未来可用 SpEx+ 替代"盲分离+声纹选轨", 让声纹引导分离本身
+- **V5**（当前）: 微调声纹 + 禁分离，Score 0.5936（fold_0 无偏）
+- **V4.1**: 预训练声纹 + 自适应分离 + 双阈值，Score 0.5452
+- **V3**: 全量分离（能量法选轨缺陷），Score 0.5285
+- **V2**: 无分离基线，Score 0.5404

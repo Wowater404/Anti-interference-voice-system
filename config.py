@@ -1,6 +1,15 @@
 """
 配置加载模块
 从 YAML 配置文件加载流水线参数
+
+配置结构 (configs/default.yaml):
+  audio:        采样率等音频参数
+  denoise:      Stage1 降噪配置 (model/enable/参数)
+  separation:   Stage2 分离配置 (model/enable/阈值/触发条件)
+  voiceprint:   Stage3 声纹配置 (model/threshold/微调权重路径)
+  asr:          Stage4 语音识别配置 (model/热词/VAD/标点)
+  device:       推理设备 ("auto"=自动检测CUDA, "cuda", "cpu")
+  output:       输出格式配置
 """
 import os
 from pathlib import Path
@@ -9,7 +18,15 @@ import yaml
 
 
 class PipelineConfig:
-    """流水线配置管理"""
+    """
+    流水线配置管理
+    加载YAML配置文件, 通过属性访问各阶段配置字典
+
+    用法:
+        config = PipelineConfig("configs/default.yaml")
+        config._cfg["voiceprint"]["threshold"] = 0.67  # 运行时修改
+        sr = config.sample_rate  # 16000
+    """
 
     def __init__(self, config_path: str = None):
         if config_path is None:

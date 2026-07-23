@@ -95,7 +95,19 @@ class ParaformerASR(BaseASR):
             self._loaded = True
 
     def transcribe(self, audio: np.ndarray, sr: int = 16000) -> str:
-        """Paraformer 识别"""
+        """
+        Paraformer 语音识别 (非自回归, 速度快)
+
+        内部流程: 音频→临时WAV文件→FunASR.generate→提取text→去标点→返回
+
+        Args:
+            audio: np.ndarray [N], float32, 目标说话人音频波形, 值域[-1,1], 16kHz单声道
+            sr: int, 采样率 (默认16000)
+
+        Returns:
+            text: str, 识别出的中文文本 (已去标点)
+                  (若模型未加载或识别失败则返回空字符串"")
+        """
         if not self._loaded:
             self.load()
 
@@ -237,6 +249,13 @@ class SherpaONNXASR(BaseASR):
 def create_asr(config: dict, device: str = "cpu") -> BaseASR:
     """
     工厂函数: 根据配置创建 ASR 模型
+
+    Args:
+        config: dict, asr配置字典 (含model/paraformer/whisper等字段)
+        device: str, "cuda" 或 "cpu"
+
+    Returns:
+        BaseASR 子类实例 (ParaformerASR / WhisperASR / SherpaONNXASR)
     """
     model_name = config.get("model", "paraformer")
 

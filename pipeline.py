@@ -90,6 +90,9 @@ class VoicePipeline:
         self.vp_threshold_separated = config.separation.get("vp_threshold_separated", 0.35)
         # V4.1: 分离触发下限 (sim_denoised 低于此值时跳过分离, 省时间)
         self.sep_trigger_min = config.separation.get("sep_trigger_min", 0.0)
+        # V5.1: 相似度跳变上限 (分离后sim比降噪sim高出此值则不信任, 防分离artifact)
+        # 数据: neg降噪sim=0.02→分离后0.92 (跳变0.90=artifact), pos降噪sim=0.55→分离后0.75 (跳变0.20=合理)
+        self.sim_jump_cap = config.separation.get("sim_jump_cap", 1.0)  # 默认1.0=不限制
 
         # 分离后音频使用策略 (V3遗留, V4.1自适应模式下忽略)
         separation_cfg = config.separation
@@ -134,6 +137,7 @@ class VoicePipeline:
             print("分离策略: V4.1 自适应分离 + 声纹辅助选轨 + 双阈值鉴别")
             print(f"  正常阈值: {self.vp_threshold}, 分离后阈值: {self.vp_threshold_separated}")
             print(f"  分离触发范围: sim_denoised ∈ [{self.sep_trigger_min}, {self.vp_threshold})")
+            print(f"  相似度跳变上限: {self.sim_jump_cap} (分离后sim跳变超过此值不信任)")
             print("  仅当降噪音频声纹相似度不足时分离, 分离后声纹选轨+高阈值鉴别")
         else:
             print("分离策略: 禁用分离, 声纹+ASR均用降噪后音频 (V2行为)")
@@ -147,23 +151,38 @@ class VoicePipeline:
         sample_id: str = ""
     ) -> Dict:
         """
-        处理单条样本: 完整流水线推理
+        处理单条样本: 完整流水线推理 (4阶段: 降噪→分离→声纹鉴别→ASR)
+
+        Pipeline流程 (V5.1):
+          Step 0: 加载kws+cmd音频 (16kHz mono)
+          Step 1: 从kws提取参考声纹 embedding [192]
+          Step 2: 对cmd降噪 (noisereduce, stationary=True, prop_decrease=0.8)
+          Step 3: 从降噪后cmd提取声纹, 算与kws的cosine相似度 sim_denoised
+          Step 4: 选择性分离: 仅当 0.50<=sim_denoised<0.67 时触发
+                  - 分离后选最相似音轨 (跳变>0.25不信任)
+                  - sim>=0.67或<0.50的样本不分离
+          Step 5: 双阈值鉴别:
+                  - 未分离: sim>=0.67 接受
+                  - 分离后: sim>=0.80 接受 (高阈值防neg假接受)
+          Step 6: ASR识别 (Paraformer, 输出去标点)
+                  - 接受: 识别目标说话人音频→文本
+                  - 拒识: 输出空字符串"" (比赛FAQ#8: 删除错误)
 
         Args:
-            kws_path: 唤醒音频路径
-            cmd_path: 识别音频路径
-            label: 真实标签 (评估用, 推理时可为 None)
-            sample_id: 样本ID
+            kws_path: str, 唤醒音频文件路径 (WAV, 16kHz)
+            cmd_path: str, 识别音频文件路径 (WAV, 16kHz)
+            label: str, 可选, 真实标签文本 (评估时用于算CER, 推理时为None)
+            sample_id: str, 样本ID (用于中间文件命名和结果追踪)
 
         Returns:
             dict: {
-                "id": sample_id,
-                "content": 识别文本或 "null",
-                "label": 真实标签,
-                "cer": CER值,
-                "similarity": 声纹相似度,
-                "is_target": 是否接受,
-                "stages": 各阶段耗时
+                "id": sample_id,           # 样本ID
+                "content": str,             # 识别文本 (拒识时为"")
+                "label": label,             # 真实标签 (评估用)
+                "cer": float or None,       # CER (有label时计算, 否则None)
+                "similarity": float,        # 声纹cosine相似度 (最终判定依据)
+                "is_target": bool,          # 是否接受为目标说话人
+                "stages": dict,             # 各阶段耗时 {load:float, voiceprint_extract:float, ...}
             }
         """
         if not self._models_loaded:
@@ -229,11 +248,12 @@ class VoicePipeline:
                 all_sources = sources
                 separation_used = True
                 # 声纹辅助选轨: 对每条分离音轨提声纹, 选与 kws 最相似的
+                # V5.1: 跳变上限检查 - 分离后sim跳变过大视为artifact, 不信任
                 for src in sources:
                     src_emb = self.voiceprint_extractor.extract(src, sr)
                     src_sim = float(np.dot(kws_embedding, src_emb) /
                                     (np.linalg.norm(kws_embedding) * np.linalg.norm(src_emb) + 1e-8))
-                    if src_sim > best_sim:
+                    if src_sim > best_sim and (src_sim - sim_denoised) <= self.sim_jump_cap:
                         best_sim = src_sim
                         best_audio = src
                 # 若分离后最佳相似度仍不如降噪音频, best_audio 保持 denoised

@@ -132,7 +132,21 @@ class SepFormer16kSeparator(BaseSeparator):
 
     def separate(self, audio: np.ndarray, sr: int = 16000,
                  target_embedding: Optional[np.ndarray] = None) -> Tuple[np.ndarray, List[np.ndarray]]:
-        """SepFormer 16kHz 盲分离 (无需降采样)"""
+        """
+        SepFormer 16kHz 盲分离 (无需降采样)
+
+        Args:
+            audio: np.ndarray [N], float32, 混合音频波形, 值域[-1,1], 16kHz单声道
+            sr: int, 采样率 (默认16000, SepFormer-16k原生支持)
+            target_embedding: np.ndarray [D], 可选, 目标说话人声纹向量
+                             (有值时用cosine相似度选轨, 无值时用能量法选轨)
+
+        Returns:
+            (best_match_audio, all_sources):
+            - best_match_audio: np.ndarray [N], float32, 与目标最匹配的音轨
+            - all_sources: list[np.ndarray], 所有分离出的音轨 (通常2条)
+            (若模型未加载则直通返回 (audio, [audio]))
+        """
         if not self._loaded:
             self.load()
 

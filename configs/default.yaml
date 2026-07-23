@@ -52,17 +52,18 @@ separation:
     checkpoint: null           # SpEx+ checkpoint路径 (需手动下载)
     modelscope_model: wenet/wesep_pretrained_models  # ModelScope预训练模型数据集
     # 目标说话人提取: 输入混合音频 + 目标声纹embedding, 输出目标人声
-  # === 分离策略 (V5: 微调声纹后禁分离) ===
-  enable: false               # V5: 微调声纹后禁用分离
+  # === 分离策略 (V5.1: 选择性分离+跳变上限, 保留分离能力) ===
+  enable: true                # V5.1: 选择性分离, 仅对边界样本触发
   max_speakers: 2              # 比赛说明: 同一时间最多2个说话人
-  # V5 禁分离原因 (fold_0验证折实测, 2026-07-23):
-  #   - 微调声纹模型本身够强(pos sim 0.8+), 不需要分离救回
-  #   - 分离选轨会放大neg假接受: 降噪音频声纹评估假接受6/95, 加分"
-  #     离后假接受30/95 (RR 0.94→0.68)
-  #   - 禁分离: CER 0.6071→0.4527, RR 0.9579→0.9368, Score 0.5403→0.5936
-  # 历史: V4.1自适应分离+双阈值(预训练声纹时有效, Score=0.5452)
-  vp_threshold_separated: 0.35  # (禁分离时无效) 分离样本的接受阈值
-  sep_trigger_min: 0.0          # (禁分离时无效) 分离触发下限
+  # V5.1 策略 (fold_0验证折实测, 2026-07-23):
+  #   - sep_trigger_min=0.50: 降噪sim<0.50直接拒识(不分离), >=0.67直接接受(不分离)
+  #   - 仅0.50<=sim<0.67的边界样本触发分离, 用vp_threshold_separated=0.80高阈值把关
+  #   - sim_jump_cap=0.25: 分离后sim跳变>0.25不信任(防artifact)
+  #   - 结果: CER=0.4484 RR=0.9263 Score=0.5912 (vs禁分离0.5936, 差0.0024)
+  #   - 分离救回8条pos(CER更好), 仅多1条neg假接受(RR微降)
+  vp_threshold_separated: 0.80  # 分离样本的接受阈值(高阈值防neg假接受)
+  sep_trigger_min: 0.50          # 分离触发下限(降噪sim<此值直接拒识,不分离)
+  sim_jump_cap: 0.25             # 分离后sim跳变上限(>此值不信任分离结果)
   # 以下两个开关在自适应模式下忽略 (保留供非自适应实验):
   voiceprint_use_separated: false # (自适应模式下忽略)
   asr_use_separated: true         # (自适应模式下忽略)

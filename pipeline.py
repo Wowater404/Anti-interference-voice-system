@@ -90,6 +90,9 @@ class VoicePipeline:
         self.vp_threshold_separated = config.separation.get("vp_threshold_separated", 0.35)
         # V4.1: 分离触发下限 (sim_denoised 低于此值时跳过分离, 省时间)
         self.sep_trigger_min = config.separation.get("sep_trigger_min", 0.0)
+        # V5.1: 相似度跳变上限 (分离后sim比降噪sim高出此值则不信任, 防分离artifact)
+        # 数据: neg降噪sim=0.02→分离后0.92 (跳变0.90=artifact), pos降噪sim=0.55→分离后0.75 (跳变0.20=合理)
+        self.sim_jump_cap = config.separation.get("sim_jump_cap", 1.0)  # 默认1.0=不限制
 
         # 分离后音频使用策略 (V3遗留, V4.1自适应模式下忽略)
         separation_cfg = config.separation
@@ -134,6 +137,7 @@ class VoicePipeline:
             print("分离策略: V4.1 自适应分离 + 声纹辅助选轨 + 双阈值鉴别")
             print(f"  正常阈值: {self.vp_threshold}, 分离后阈值: {self.vp_threshold_separated}")
             print(f"  分离触发范围: sim_denoised ∈ [{self.sep_trigger_min}, {self.vp_threshold})")
+            print(f"  相似度跳变上限: {self.sim_jump_cap} (分离后sim跳变超过此值不信任)")
             print("  仅当降噪音频声纹相似度不足时分离, 分离后声纹选轨+高阈值鉴别")
         else:
             print("分离策略: 禁用分离, 声纹+ASR均用降噪后音频 (V2行为)")
@@ -229,11 +233,12 @@ class VoicePipeline:
                 all_sources = sources
                 separation_used = True
                 # 声纹辅助选轨: 对每条分离音轨提声纹, 选与 kws 最相似的
+                # V5.1: 跳变上限检查 - 分离后sim跳变过大视为artifact, 不信任
                 for src in sources:
                     src_emb = self.voiceprint_extractor.extract(src, sr)
                     src_sim = float(np.dot(kws_embedding, src_emb) /
                                     (np.linalg.norm(kws_embedding) * np.linalg.norm(src_emb) + 1e-8))
-                    if src_sim > best_sim:
+                    if src_sim > best_sim and (src_sim - sim_denoised) <= self.sim_jump_cap:
                         best_sim = src_sim
                         best_audio = src
                 # 若分离后最佳相似度仍不如降噪音频, best_audio 保持 denoised

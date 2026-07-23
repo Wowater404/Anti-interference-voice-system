@@ -52,18 +52,17 @@ separation:
     checkpoint: null           # SpEx+ checkpoint路径 (需手动下载)
     modelscope_model: wenet/wesep_pretrained_models  # ModelScope预训练模型数据集
     # 目标说话人提取: 输入混合音频 + 目标声纹embedding, 输出目标人声
-  # === 分离策略 (V4.1: 自适应分离+声纹选轨+双阈值) ===
-  enable: true                # V4.1: 自适应分离, 仅对声纹相似度不足的样本启用
+  # === 分离策略 (V5: 微调声纹后禁分离) ===
+  enable: false               # V5: 微调声纹后禁用分离
   max_speakers: 2              # 比赛说明: 同一时间最多2个说话人
-  # V4.1 自适应策略 (pipeline.py Step 4-5):
-  #   1. 先算降噪音频声纹相似度 sim_denoised
-  #   2. 仅当 sep_trigger_min <= sim_denoised < vp_threshold 时才分离
-  #   3. 分离后对每条音轨提声纹, 选与 kws 最相似的音轨 (声纹选轨)
-  #   4. 双阈值鉴别: 分离样本用 vp_threshold_separated(0.35), 未分离用 vp_threshold(0.28)
-  #   5. 若分离后最佳相似度仍不如降噪音频, 回退降噪音频
-  # 数据验证: V4.1 Score=0.5452 > V2 Score=0.5404 (CER降0.012, RR不变)
-  vp_threshold_separated: 0.35  # V4.1: 分离样本的接受阈值 (高于正常阈值, 防neg假接受)
-  sep_trigger_min: 0.0          # 分离触发下限 (sim_denoised低于此值时跳过分离, 0=不过滤)
+  # V5 禁分离原因 (fold_0验证折实测, 2026-07-23):
+  #   - 微调声纹模型本身够强(pos sim 0.8+), 不需要分离救回
+  #   - 分离选轨会放大neg假接受: 降噪音频声纹评估假接受6/95, 加分"
+  #     离后假接受30/95 (RR 0.94→0.68)
+  #   - 禁分离: CER 0.6071→0.4527, RR 0.9579→0.9368, Score 0.5403→0.5936
+  # 历史: V4.1自适应分离+双阈值(预训练声纹时有效, Score=0.5452)
+  vp_threshold_separated: 0.35  # (禁分离时无效) 分离样本的接受阈值
+  sep_trigger_min: 0.0          # (禁分离时无效) 分离触发下限
   # 以下两个开关在自适应模式下忽略 (保留供非自适应实验):
   voiceprint_use_separated: false # (自适应模式下忽略)
   asr_use_separated: true         # (自适应模式下忽略)
@@ -83,11 +82,17 @@ voiceprint:
     # 3DSpeaker 框架, 需安装 modelscope
     model_id: iic/speech_campplus_sv_zh-cn_16k-common
     embedding_dim: 192
+    # 微调权重 (datasetA增强数据对比学习微调: 双向margin损失+1:1平衡采样+cmd降噪)
+    # 训练: tools/train_camplus_finetune.py, 模型说明见 finetuned_models/README.md
+    # camplus_v3_fold0: 80%数据训练, fold_0验证折无偏验证 Score=0.5936 (可靠, 推荐)
+    # camplus_v3_full: 100%数据训练, 无法在A上无偏评估 (备选, 赌B集更好)
+    finetuned_path: finetuned_models/camplus_v3_fold0.pt
   wespeaker:
     checkpoint: null
   # 鉴别阈值: cosine similarity 低于此值则拒识
-  # 优化后: 0.28 (分析显示此阈值下综合得分最优)
-  threshold: 0.28              # 优化值 (原 0.31)
+  # V5微调模型: 0.67 (fold_0验证折实测最优, Score=0.5936)
+  # 历史: 预训练模型用 0.28 (Score=0.5403)
+  threshold: 0.67              # V5微调模型阈值
   enable: true
 
 # ===========================================================================

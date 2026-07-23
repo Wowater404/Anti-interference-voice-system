@@ -12,6 +12,9 @@ __pycache__/
 # === 推理结果与日志 (运行产物, 不上传) ===
 results/
 
+# === 训练运行输出 (checkpoint/日志, 不上传; 最终模型在 finetuned_models/) ===
+runs/
+
 # === IDE 配置 ===
 .idea/
 .vscode/

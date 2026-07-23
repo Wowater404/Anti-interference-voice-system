@@ -172,13 +172,17 @@ class CAMPlusExtractor(BaseVoiceprintExtractor):
 
     def __init__(self, device: str = "cpu",
                  model_id: str = "iic/speech_campplus_sv_zh-cn_16k-common",
-                 embedding_dim: int = 192):
+                 embedding_dim: int = 192,
+                 finetuned_path: Optional[str] = None):
         super().__init__(device)
         self.model_id = model_id
         self.embedding_dim = embedding_dim
+        # 微调权重路径 (datasetA增强数据对比学习微调, tools/train_camplus_finetune.py 产出)
+        # 为 None 时使用官方预训练权重 (zero-shot)
+        self.finetuned_path = finetuned_path
 
     def load(self):
-        """加载 CAM++ 模型 (通过 ModelScope pipeline)"""
+        """加载 CAM++ 模型 (通过 ModelScope pipeline, 可选加载微调权重)"""
         try:
             from modelscope.pipelines import pipeline
             from modelscope.utils.constant import Tasks
@@ -192,6 +196,21 @@ class CAMPlusExtractor(BaseVoiceprintExtractor):
             self.pipeline = sv_pipeline
             self._loaded = True
             print(f"[CAM++] 模型加载成功 (threshold={sv_pipeline.thr})")
+
+            # 加载微调权重 (覆盖 embedding_model)
+            if self.finetuned_path:
+                # 相对路径解析为项目根目录相对 (避免依赖运行目录)
+                ft_path = self.finetuned_path
+                if not os.path.isabs(ft_path):
+                    ft_path = os.path.join(PROJECT_ROOT, ft_path)
+                if os.path.exists(ft_path):
+                    import torch
+                    state = torch.load(ft_path, map_location="cpu")
+                    self.model.embedding_model.load_state_dict(state, strict=True)
+                    self.model.embedding_model.eval()
+                    print(f"[CAM++] 已加载微调权重: {ft_path}")
+                else:
+                    print(f"[CAM++] 警告: 微调权重不存在 {ft_path}, 使用预训练权重")
         except ImportError as e:
             print(f"[CAM++] 警告: modelscope 导入失败 ({e}), 使用直通模式")
             print("  可能缺少依赖, 尝试: pip install addict datasets simplejson")
@@ -288,6 +307,7 @@ def create_voiceprint_extractor(config: dict, device: str = "cpu") -> BaseVoicep
             device=device,
             model_id=cfg.get("model_id", "iic/speech_campplus_sv_zh-cn_16k-common"),
             embedding_dim=cfg.get("embedding_dim", 192),
+            finetuned_path=cfg.get("finetuned_path"),
         )
     elif model_name == "wespeaker":
         cfg = config.get("wespeaker", {})

@@ -14,10 +14,15 @@ audio:
 # Stage 1: 降噪模型
 # ===========================================================================
 denoise:
-  # 主选: noisereduce — 纯Python降噪, 无需编译, 适合快速验证
-  # 备选: DeepFilterNet3 — 轻量实时, 需Rust编译
-  #       FullSubNet+      — 降噪质量更高但更重
-  model: noisereduce
+  # 主选: GTCRN — 48K参数深度学习降噪, 复数域mask, 实时推理
+  # 备选: noisereduce   — 纯Python频谱门限, 适合快速验证
+  #       DeepFilterNet3 — 轻量实时, 需Rust编译
+  #       FullSubNet+    — 降噪质量更高但更重
+  model: gtcrn
+  gtcrn:
+    checkpoint: dns3           # dns3 (通用噪声) 或 vctk (人声)
+    n_fft: 512                 # STFT 帧长
+    hop_length: 256            # STFT 帧移
   noisereduce:
     stationary: true            # 静态噪声假设 (适合空调等持续噪声)
     prop_decrease: 0.8          # 噪声抑制比例 (0-1, 越大抑制越多)

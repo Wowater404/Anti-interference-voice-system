@@ -1,5 +1,9 @@
 # === 模型权重 (2.4GB+, 运行时从 ModelScope/HuggingFace 自动下载) ===
-pretrained/
+pretrained/*
+!pretrained/gtcrn/
+
+# === 虚拟环境 ===
+.venv/
 
 # === Python 缓存 ===
 __pycache__/

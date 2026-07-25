@@ -246,6 +246,120 @@ class NoiseReduceDenoiser(BaseDenoiser):
         return enhanced.astype(np.float32)
 
 
+class GTCRNDenoiser(BaseDenoiser):
+    """
+    GTCRN 降噪器 (深度学习, 默认推荐)
+    - 仅 48.2K 参数, 33.0 MMACs/s, 实时推理
+    - ShuffleNetV2 + SFE + TRA + Dual-Path GRNN
+    - Complex Ratio Mask: 同时修复幅度和相位
+    - 预训练权重: DNS3 (通用) / VCTK (人声)
+
+    输入/输出: np.ndarray, float32, 单声道, [-1, 1], 16kHz
+    """
+
+    def __init__(self, device: str = "cpu", checkpoint: str = "dns3",
+                 n_fft: int = 512, hop_length: int = 256):
+        super().__init__(device)
+        self.checkpoint_name = checkpoint
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+
+        model_map = {
+            "dns3": "model_trained_on_dns3.tar",
+            "vctk": "model_trained_on_vctk.tar",
+        }
+        ckpt_file = model_map.get(checkpoint, "model_trained_on_dns3.tar")
+        self.checkpoint_path = os.path.join(
+            PROJECT_ROOT, "pretrained", "gtcrn", ckpt_file
+        )
+        self._window = None
+        self._torch_device = None
+
+    def load(self):
+        """加载 GTCRN 模型权重"""
+        try:
+            import torch
+            from modules.gtcrn import GTCRN
+
+            actual_device = self.device
+            if actual_device == "auto":
+                actual_device = "cuda" if torch.cuda.is_available() else "cpu"
+
+            self._torch_device = torch.device(actual_device)
+            self.model = GTCRN().to(self._torch_device).eval()
+
+            if os.path.exists(self.checkpoint_path):
+                ckpt = torch.load(self.checkpoint_path,
+                                  map_location=self._torch_device,
+                                  weights_only=True)
+                self.model.load_state_dict(ckpt["model"])
+            else:
+                print(f"[GTCRN] 警告: checkpoint 不存在 ({self.checkpoint_path}), "
+                      f"使用未训练权重")
+
+            self._window = torch.hann_window(self.n_fft).pow(0.5)
+            self._loaded = True
+            print(f"[GTCRN] 模型加载成功 (checkpoint={self.checkpoint_name}, "
+                  f"device={actual_device})")
+        except ImportError as e:
+            print(f"[GTCRN] 警告: 依赖缺失 ({e}), 使用直通模式")
+            self._loaded = True
+
+    def denoise(self, audio: np.ndarray, sr: int = 16000) -> np.ndarray:
+        """
+        GTCRN 降噪
+
+        Args:
+            audio: np.ndarray, float32, [-1, 1], 单声道
+            sr: 原始采样率 (非 16kHz 自动重采样)
+
+        Returns:
+            np.ndarray, float32, [-1, 1], 单声道, 16kHz
+        """
+        if not self._loaded:
+            self.load()
+
+        if self.model is None:
+            return audio
+
+        import torch
+
+        # 重采样到 16kHz
+        if sr != 16000:
+            from utils.audio import resample
+            audio = resample(audio, sr, 16000)
+
+        mix = torch.from_numpy(audio.astype(np.float32))
+
+        # STFT
+        spec = torch.stft(
+            mix, self.n_fft, self.hop_length, self.n_fft,
+            self._window, return_complex=True,
+        )
+        spec = torch.view_as_real(spec).to(self._torch_device)  # (F, T, 2)
+
+        # 推理
+        with torch.no_grad():
+            output = self.model(spec[None])[0]  # (F, T, 2)
+
+        output = torch.view_as_complex(output.contiguous()).cpu()
+
+        # iSTFT
+        enh = torch.istft(
+            output, self.n_fft, self.hop_length, self.n_fft, self._window
+        )
+        enhanced = enh.detach().cpu().numpy().astype(np.float32)
+
+        # 匹配原始长度
+        if len(enhanced) < len(audio):
+            enhanced = np.pad(enhanced, (0, len(audio) - len(enhanced)))
+        else:
+            enhanced = enhanced[:len(audio)]
+
+        # 严格裁剪到 [-1, 1]
+        return np.clip(enhanced, -1.0, 1.0)
+
+
 class PassThroughDenoiser(BaseDenoiser):
     """直通降噪器 (不处理, 用于调试)"""
 
@@ -273,7 +387,15 @@ def create_denoiser(config: dict, device: str = "cpu") -> BaseDenoiser:
 
     model_name = config.get("model", "noisereduce")
 
-    if model_name == "noisereduce":
+    if model_name == "gtcrn":
+        cfg = config.get("gtcrn", {})
+        return GTCRNDenoiser(
+            device=device,
+            checkpoint=cfg.get("checkpoint", "dns3"),
+            n_fft=cfg.get("n_fft", 512),
+            hop_length=cfg.get("hop_length", 256),
+        )
+    elif model_name == "noisereduce":
         cfg = config.get("noisereduce", {})
         return NoiseReduceDenoiser(
             device=device,

@@ -31,6 +31,9 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 class BaseSeparator:
     """人声分离模型基类"""
 
+    # 盲分离模型输出多条音轨；目标说话人提取模型输出一条目标音轨。
+    is_target_extractor = False
+
     def __init__(self, device: str = "cpu", max_speakers: int = 2):
         self.device = device
         self.max_speakers = max_speakers
@@ -39,6 +42,10 @@ class BaseSeparator:
 
     def load(self):
         raise NotImplementedError
+
+    def set_reference_audio(self, audio: np.ndarray, sr: int = 16000):
+        """设置目标说话人参考音频；盲分离模型无需处理。"""
+        return None
 
     def separate(self, audio: np.ndarray, sr: int = 16000,
                  target_embedding: Optional[np.ndarray] = None) -> Tuple[np.ndarray, List[np.ndarray]]:
@@ -307,97 +314,6 @@ class SepFormerSeparator(BaseSeparator):
         return int(np.argmax([np.sum(s ** 2) for s in sources]))
 
 
-class SpExPlusSeparator(BaseSeparator):
-    """
-    SpEx+ 目标说话人提取器 (WeSep)
-    - 输入: 混合音频 + 目标说话人参考声纹embedding
-    - 输出: 仅目标说话人的语音 (不需要选轨, 天然就是目标人)
-    - 更适合比赛场景: 有唤醒音频kws作为参考
-    - 预训练模型: ModelScope wenet/wesep_pretrained_models (需下载)
-    - 安装: pip install wesep 或 git clone https://github.com/wenet-e2e/wesep.git
-
-    注意: 当前预训练模型尚未完全发布, 此类为预留接口
-    """
-
-    def __init__(self, device: str = "cpu", max_speakers: int = 2,
-                 checkpoint: Optional[str] = None,
-                 modelscope_model: Optional[str] = None):
-        super().__init__(device, max_speakers)
-        self.checkpoint = checkpoint
-        self.modelscope_model = modelscope_model or "wenet/wesep_pretrained_models"
-
-    def load(self):
-        """加载 SpEx+ 模型 (从本地checkpoint或ModelScope)"""
-        try:
-            import torch
-
-            print("[SpEx+] 目标说话人提取模式")
-            ckpt_path = self.checkpoint
-
-            # 尝试从 ModelScope 下载预训练模型
-            if not ckpt_path:
-                default_ckpt = os.path.join(PROJECT_ROOT, "pretrained", "spex_plus", "best.pt.tar")
-                if os.path.exists(default_ckpt):
-                    ckpt_path = default_ckpt
-                else:
-                    # 尝试从 ModelScope 下载
-                    try:
-                        from modelscope.msdatasets import MsDataset
-                        print(f"[SpEx+] 尝试从 ModelScope 下载预训练模型: {self.modelscope_model}")
-                        # ModelScope 下载逻辑 (需要登录)
-                        # ds = MsDataset.load(self.modelscope_model)
-                        # 实际下载路径需要根据 ModelScope 数据集结构确定
-                        print("[SpEx+] ModelScope 预训练模型下载需要登录, 请手动下载")
-                        print(f"  下载地址: https://www.modelscope.cn/datasets/{self.modelscope_model}")
-                        print(f"  下载后放置到: {os.path.join(PROJECT_ROOT, 'pretrained', 'spex_plus')}")
-                    except Exception as e:
-                        print(f"[SpEx+] ModelScope 下载失败: {e}")
-
-            if ckpt_path and os.path.exists(ckpt_path):
-                # 加载 checkpoint
-                print(f"[SpEx+] 从 checkpoint 加载: {ckpt_path}")
-                # 实际 SpEx+ 模型加载逻辑 (需要 wesep 包)
-                # from wesep.bin.infer import SpEx_Plus
-                # nnet = SpEx_Plus(...)
-                # cpt = torch.load(ckpt_path, map_location=self.device)
-                # nnet.load_state_dict(cpt["model_state_dict"])
-                # self.model = nnet
-                self._loaded = True
-                print("[SpEx+] 模型加载成功")
-            else:
-                print("[SpEx+] 警告: 未找到 checkpoint, 使用直通模式")
-                print("  SpEx+ 预训练模型需手动下载, 参见上方说明")
-                self._loaded = True
-        except ImportError as e:
-            print(f"[SpEx+] 警告: 依赖未安装 ({e}), 使用直通模式")
-            print("  安装命令: pip install wesep 或 git clone https://github.com/wenet-e2e/wesep.git")
-            self._loaded = True
-
-    def separate(self, audio: np.ndarray, sr: int = 16000,
-                 target_embedding: Optional[np.ndarray] = None) -> Tuple[np.ndarray, List[np.ndarray]]:
-        """SpEx+ 目标提取"""
-        if not self._loaded:
-            self.load()
-
-        if self.model is None:
-            # 直通模式 (无模型可用)
-            return audio, [audio]
-
-        import torch
-
-        # SpEx+ 推理: 输入混合音频 + 参考声纹, 输出目标人语音
-        # with torch.no_grad():
-        #     raw = torch.tensor(audio, dtype=torch.float32, device=self.device)
-        #     aux_len = torch.tensor([len(audio)], dtype=torch.float32, device=self.device)
-        #     # target_embedding 作为参考声纹
-        #     sps, sps2, sps3, spk_pred = self.model(raw, target_embedding, aux_len)
-        #     extracted = np.squeeze(sps.detach().cpu().numpy())
-        #     return extracted, [extracted]
-
-        # 占位: 模型加载成功后实现实际推理逻辑
-        return audio, [audio]
-
-
 class PassThroughSeparator(BaseSeparator):
     """直通分离器 (不处理, 用于调试/禁用分离)"""
 
@@ -417,7 +333,7 @@ def create_separator(config: dict, device: str = "cpu") -> BaseSeparator:
     model 选项:
       - "sepformer16k": 16kHz原生SepFormer (推荐, 无降采样)
       - "sepformer":    8kHz SepFormer (已弃用, 降采样降质)
-      - "spex_plus":    SpEx+ 目标说话人提取 (预留接口, 需下载预训练模型)
+      - "spex_plus":    SpEx+ 16kHz目标说话人提取
       - 其他:           直通模式
     """
     if not config.get("enable", True):
@@ -440,12 +356,20 @@ def create_separator(config: dict, device: str = "cpu") -> BaseSeparator:
             huggingface_repo=cfg.get("huggingface_repo", "speechbrain/sepformer-libri2mix"),
         )
     elif model_name == "spex_plus":
+        # 延迟导入，避免其他分离后端依赖 SpEx+ 权重。
+        from modules.spexplus_separator import SpExPlusSeparator
+
         cfg = config.get("spex_plus", {})
         return SpExPlusSeparator(
             device=device,
             max_speakers=config.get("max_speakers", 2),
-            checkpoint=cfg.get("checkpoint"),
-            modelscope_model=cfg.get("modelscope_model", "wenet/wesep_pretrained_models"),
+            checkpoint=cfg.get(
+                "checkpoint", "pretrained/spex_plus/checkpoint.pth"
+            ),
+            sample_rate=cfg.get("sample_rate", 16000),
+            num_spks=cfg.get("num_spks", 90),
+            expected_sha256=cfg.get("expected_sha256"),
+            allow_fallback=cfg.get("allow_fallback", False),
         )
     else:
         print(f"[Separator] 未知模型 {model_name}, 使用直通模式")

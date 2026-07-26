@@ -59,6 +59,8 @@ def main():
                         help="配置文件路径 (默认 configs/default.yaml)")
     parser.add_argument("--output", type=str, default=None,
                         help="输出结果文件路径")
+    parser.add_argument("--text-output", type=str, default=None,
+                        help="另存为可用记事本打开的 UTF-8 JSON 文本路径")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="断点续传文件路径 (自动恢复已处理样本)")
 
@@ -66,6 +68,17 @@ def main():
     parser.add_argument("--device", type=str, default=None,
                         choices=["cuda", "cpu"],
                         help="推理设备 (覆盖配置文件)")
+    parser.add_argument("--separator-model", "--separator_model", type=str, default=None,
+                        help=("覆盖人声分离模型，例如 sepformer16k、sepformer、"
+                              "spex_plus、passthrough"))
+    parser.add_argument("--sep-trigger-min", type=float, default=None,
+                        help="覆盖分离触发相似度下限")
+    parser.add_argument("--vp-threshold", type=float, default=None,
+                        help="覆盖未分离样本的声纹接受阈值")
+    parser.add_argument("--vp-threshold-separated", type=float, default=None,
+                        help="覆盖分离样本的声纹接受阈值")
+    parser.add_argument("--sim-jump-cap", type=float, default=None,
+                        help="覆盖分离后声纹相似度允许的最大跳变量")
 
     args = parser.parse_args()
 
@@ -76,6 +89,22 @@ def main():
     # 覆盖设备
     if args.device:
         config._cfg["device"] = args.device
+    if args.separator_model:
+        separation_cfg = config._cfg.setdefault("separation", {})
+        separation_cfg["model"] = args.separator_model
+        separation_cfg["enable"] = args.separator_model not in ("passthrough", "none")
+    if args.sep_trigger_min is not None:
+        config._cfg.setdefault("separation", {})["sep_trigger_min"] = args.sep_trigger_min
+    if args.vp_threshold is not None:
+        config._cfg.setdefault("voiceprint", {})["threshold"] = args.vp_threshold
+    if args.vp_threshold_separated is not None:
+        config._cfg.setdefault("separation", {})[
+            "vp_threshold_separated"
+        ] = args.vp_threshold_separated
+    if args.sim_jump_cap is not None:
+        config._cfg.setdefault("separation", {})["sim_jump_cap"] = args.sim_jump_cap
+
+    print(f"当前分离模型: {config.separation.get('model', 'passthrough')}")
 
     # 创建流水线
     pipeline = VoicePipeline(config)
@@ -150,9 +179,16 @@ def main():
         print(f"  综合得分: {submission['metrics']['final_score']}")
         print(f"  总推理时间: {submission['result']['duration']}s")
 
+        # 官方提交结构的顶层只能包含 result；metrics 仅供终端汇总使用。
+        official_submission = {"result": submission["result"]}
         with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(submission, f, ensure_ascii=False, indent=2)
+            json.dump(official_submission, f, ensure_ascii=False, indent=2)
         print(f"\n结果已保存至: {output_path}")
+
+        text_output_path = args.text_output or str(Path(output_path).with_suffix(".txt"))
+        with open(text_output_path, "w", encoding="utf-8") as f:
+            json.dump(official_submission, f, ensure_ascii=False, indent=2)
+        print(f"记事本文件已保存至: {text_output_path}")
 
     else:
         parser.print_help()

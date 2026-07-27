@@ -122,7 +122,6 @@ asr:
 # 数据集路径
 # ===========================================================================
 dataset:
-  data_root: "F:/挑杯资料/datasetA"
   pos_jsonl: "pos.jsonl"
   neg_jsonl: "neg.jsonl"
   pos_dir: "pos"

@@ -24,7 +24,7 @@ os.environ.setdefault('MODELSCOPE_CACHE',
 from modules.voiceprint import CAMPlusExtractor
 import soundfile as sf
 
-DATA_ROOT = "C:/Users/善水/Desktop/datasetA/datasetA"
+DATA_ROOT = os.environ.get("DATA_ROOT", "")
 FT = os.path.join(PROJECT_ROOT, "runs/fold_0/camplus_finetuned_best.pt")
 OUT_NPY = os.path.join(PROJECT_ROOT, "runs", "ft_sims_full.npz")
 

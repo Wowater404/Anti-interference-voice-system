@@ -25,7 +25,7 @@ from modules.voiceprint import CAMPlusExtractor
 from modules.denoiser import create_denoiser
 import soundfile as sf
 
-DATA_ROOT = "C:/Users/善水/Desktop/datasetA/datasetA"
+DATA_ROOT = os.environ.get("DATA_ROOT", "")
 AUG_ROOT = "F:/龙虾/2026-07-18-13-57-00/datasetA_aug"
 V3 = os.path.join(PROJECT_ROOT, "runs/fold_0_v2/camplus_finetuned_best.pt")
 

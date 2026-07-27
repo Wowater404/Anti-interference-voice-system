@@ -38,12 +38,9 @@ denoise:
 # Stage 2: 人声分离 / 目标说话人提取
 # ===========================================================================
 separation:
-  # V3: 16kHz SepFormer 替代 8kHz 版本
-  # 主选: SepFormer-16k (SpeechBrain) — 16kHz原生盲分离, 无降采样
-  #       SepFormer-8k  (已弃用)      — 8kHz盲分离, 降采样导致音质降级
-  #       SpEx+ (WeSep)               — 目标说话人提取, 用声纹参考
-  #       PassThrough                  — 不做分离 (V2行为)
-  model: sepformer16k
+  # 最终选择：SpEx+ 16kHz目标说话人提取模型。
+  # 每条样本以对应的唤醒音频作为目标说话人参考。
+  model: spex_plus
   sepformer16k:
     # SpeechBrain 预训练模型, 2-speaker separation at 16kHz
     huggingface_repo: speechbrain/sepformer-whamr16k
@@ -54,21 +51,18 @@ separation:
     huggingface_repo: speechbrain/sepformer-libri2mix
     sample_rate: 8000          # 原生 8kHz, 需重采样
   spex_plus:
-    checkpoint: null           # SpEx+ checkpoint路径 (需手动下载)
-    modelscope_model: wenet/wesep_pretrained_models  # ModelScope预训练模型数据集
-    # 目标说话人提取: 输入混合音频 + 目标声纹embedding, 输出目标人声
-  # === 分离策略 (V5.1: 选择性分离+跳变上限, 保留分离能力) ===
-  enable: true                # V5.1: 选择性分离, 仅对边界样本触发
+    checkpoint: pretrained/spex_plus/checkpoint.pth
+    sample_rate: 16000
+    num_spks: 90
+    expected_sha256: 2d6a2f2b404fd18a809eb82052fd64ef0bd986f410b1043bc666b54121e44b5c
+    # 权重缺失或校验失败时直接停止，禁止静默退化为直通模式。
+    allow_fallback: false
+  # 与本次datasetA正式记录完全一致的阈值。
+  enable: true
   max_speakers: 2              # 比赛说明: 同一时间最多2个说话人
-  # V5.1 策略 (fold_0验证折实测, 2026-07-23):
-  #   - sep_trigger_min=0.50: 降噪sim<0.50直接拒识(不分离), >=0.67直接接受(不分离)
-  #   - 仅0.50<=sim<0.67的边界样本触发分离, 用vp_threshold_separated=0.80高阈值把关
-  #   - sim_jump_cap=0.25: 分离后sim跳变>0.25不信任(防artifact)
-  #   - 结果: CER=0.4484 RR=0.9263 Score=0.5912 (vs禁分离0.5936, 差0.0024)
-  #   - 分离救回8条pos(CER更好), 仅多1条neg假接受(RR微降)
-  vp_threshold_separated: 0.80  # 分离样本的接受阈值(高阈值防neg假接受)
-  sep_trigger_min: 0.50          # 分离触发下限(降噪sim<此值直接拒识,不分离)
-  sim_jump_cap: 0.25             # 分离后sim跳变上限(>此值不信任分离结果)
+  vp_threshold_separated: 0.35
+  sep_trigger_min: 0.0
+  sim_jump_cap: 1.0
   # 以下两个开关在自适应模式下忽略 (保留供非自适应实验):
   voiceprint_use_separated: false # (自适应模式下忽略)
   asr_use_separated: true         # (自适应模式下忽略)
@@ -88,17 +82,12 @@ voiceprint:
     # 3DSpeaker 框架, 需安装 modelscope
     model_id: iic/speech_campplus_sv_zh-cn_16k-common
     embedding_dim: 192
-    # 微调权重 (datasetA增强数据对比学习微调: 双向margin损失+1:1平衡采样+cmd降噪)
-    # 训练: tools/train_camplus_finetune.py, 模型说明见 finetuned_models/README.md
-    # camplus_v3_fold0: 80%数据训练, fold_0验证折无偏验证 Score=0.5936 (可靠, 推荐)
-    # camplus_v3_full: 100%数据训练, 无法在A上无偏评估 (备选, 赌B集更好)
-    finetuned_path: finetuned_models/camplus_v3_fold0.pt
+    # 本次SpEx+测试使用官方预训练CAM++，不加载datasetA微调权重。
+    finetuned_path: null
   wespeaker:
     checkpoint: null
   # 鉴别阈值: cosine similarity 低于此值则拒识
-  # V5微调模型: 0.67 (fold_0验证折实测最优, Score=0.5936)
-  # 历史: 预训练模型用 0.28 (Score=0.5403)
-  threshold: 0.67              # V5微调模型阈值
+  threshold: 0.28
   enable: true
 
 # ===========================================================================
@@ -137,9 +126,9 @@ dataset:
 # 输出配置
 # ===========================================================================
 output:
-  result_dir: "F:/龙虾/2026-07-18-13-57-00/voice_pipeline/results"
+  result_dir: "results/spex_plus"
   save_intermediate: false     # 保存中间音频 (降噪后, 分离后) - 关闭以加速
-  intermediate_dir: "F:/龙虾/2026-07-18-13-57-00/voice_pipeline/results/intermediate"
+  intermediate_dir: "results/spex_plus/intermediate"
 
 # ===========================================================================
 # 推理设备

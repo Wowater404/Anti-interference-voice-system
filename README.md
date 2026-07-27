@@ -1,132 +1,106 @@
-# 抗干扰语音指令识别流水线
+# 抗干扰语音指令识别系统 - SpEx+ 最终版
 
-> **项目**: XH-202615 复杂交互场景的抗干扰语音指令识别技术
-> **发榜单位**: 美的集团
-> **当前版本**: V5.1（微调声纹 + 选择性分离 + 全量注释）
+本分支在原 V5.1 流水线基础上，将多人语音处理阶段最终确定为
+**SpEx+ 16 kHz 目标说话人提取模型**。
 
-## 架构概览
+流水线：
 
-```
-唤醒音频 kws (1.5s)              识别音频 cmd (1.28~6.2s)
-       │                                │
-       ▼                                ▼
-  [CAM++ ①]                     [Stage 1: 降噪]
-  提取参考声纹                   noisereduce (谱减法)
-       │                                │
-       │ kws_embedding                  ▼ denoised_audio
-       │                       [CAM++ ②] 提声纹
-       │                                │
-       │                     sim = cos(kws_emb, cmd_emb)
-       │                                │
-       │                     <sim >= 0.67 (微调阈值) ?>
-       │                     ╱              ╲
-       │              是(目标说话人)      否(拒识)
-       │                     │              │
-       │                     ▼              ▼
-       │              [Stage 2: ASR]    content = ""
-       │              Paraformer
-       │                     │
-       └──────────────►  content (识别文本)
-```
+`noisereduce -> SpEx+ -> CAM++ -> Paraformer`
 
-**V5/V5.1 与 V4.1 的核心差异**：CAM++ 声纹模型用 datasetA 增强数据微调。
-- **V5（禁分离）**：微调模型本身够强（pos sim 0.8+），分离选轨反而放大 neg 假接受
-  （fold_0 验证折实测：降噪音频假接受 6/95，加分离后假接受 30/95），故 V5 直接禁分离。
-- **V5.1（选择性分离）**：应"分离不能禁用"的需求，改为仅对**边界样本**触发分离
-  （`sep_trigger_min=0.50`，即 0.50 ≤ sim < 0.67 的灰色地带才分离），分离后若相似度跳变
-  >`sim_jump_cap=0.25` 则不信任分离结果（防 artifact 选错轨）。分离后用更高阈值
-  `vp_threshold_separated=0.80` 判定，平衡救回 pos 与 neg 假接受。
+SpEx+ 同时读取：
 
-## 性能对比（fold_0 验证折，无偏）
+- 待识别的混合/指令音频；
+- 同一条样本的唤醒音频，作为目标说话人参考。
 
-| 配置 | CER | RR | pos接受 | neg假接受 | Score |
-|------|-----|-----|---------|----------|-------|
-| V4.1 基线（预训练+自适应分离） | 0.6071 | 0.9579 | 175/273 | 4/95 | 0.5403 |
-| **V5 微调 + 禁分离** | **0.4527** | 0.9368 | **242/273** | 6/95 | **0.5936** |
-| V5.1 微调 + 选择性分离 | 0.4478 | 0.9263 | 249/273 | 7/95 | 0.5914 |
+模型直接输出一条目标说话人音轨。权重、配置或参考音频缺失时程序会
+立即停止，不会静默退化为直通音频。
 
-V5 Score 提升 **+0.053**（相对 +9.8%）：CER 大降 0.154（多救回 67 条 pos），RR 仅微降 0.021。
-V5.1 在保留分离能力的前提下 Score 仅差 0.0022，但多救回 7 条 pos、分离能力可用（详见 configs/default.yaml）。
+## 最终实验结果
 
-## 微调声纹模型（V5 核心）
+测试集：datasetA，共 1838 条（pos 1364 / neg 474）。
 
-CAM++ 用 datasetA 增强数据对比学习微调，训练方法（V3，防塌缩）：
+| 指标 | 结果 |
+|---|---:|
+| CER | 0.5765 |
+| 拒识率 RR | 0.9346 |
+| 识别项得分 | 0.5432 |
+| 总推理时间 | 353.57 秒 |
+| SpEx+ 实际触发 | 761 条 |
+| 平均触发提取时间 | 0.0636 秒 |
+| 硬错误 | 0 |
 
-- **数据增强**（`tools/augment_dataset.py`）：每条样本 8 倍增强
-  （原始 / 音量±4dB / 白噪声SNR15 / 粉噪声SNR20 / 片段截取 / 变声±半音），
-  pos 1364→10912 条，neg 474→3792 条
-- **五折交叉验证**（`tools/make_folds.py`）：按 orig_id 划分防泄漏，val 仅用原始音频
-- **双向 margin 损失**：pos>0.7, neg<0.3，留 0.4 间隔——不把 pos 推向 cos=1，避免 embedding 塌缩
-- **1:1 平衡采样**：消除 pos 拉力优势
-- **预处理一致**：kws 原始 + cmd 降噪，与 pipeline 推理完全一致（解决分布不匹配）
-- **防塌缩**：冻结主干前半 + 全部 BN 设 eval + lr=1e-4 + EER 监控
+识别项得分不包含比赛的推理时间和内存效率项。完整、可复核记录见
+`experiment_logs/spex_plus_test.log`。
 
-模型：`finetuned_models/camplus_v3_fold0.pt`（见该目录 README）
+## 安装
 
-## 快速开始
+建议使用 Python 3.12、PyTorch 和 torchaudio 的匹配 CUDA 版本。
 
-```bash
-# 1. 安装依赖
-pip install -r requirements.txt
-
-# 2. 单样本推理
-python run_inference.py --kws "path/to/kws.wav" --cmd "path/to/cmd.wav" --label "指令文本"
-
-# 3. 批量推理 (datasetA)
-python run_inference.py --data_root "path/to/datasetA" --split all \
-    --output results/output.json --checkpoint results/ckpt.json
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-首次运行自动从 ModelScope/HuggingFace 下载预训练模型到 `pretrained/`（约 2GB），
-微调权重从 `finetuned_models/` 加载（已随仓库提供）。
+下载并严格校验 SpEx+ 官方检查点：
 
-## 重新训练微调模型（可选）
-
-```bash
-# 1. 数据增强
-python tools/augment_dataset.py --src "path/to/datasetA" --dst "path/to/datasetA_aug" --workers 8
-
-# 2. 五折划分
-python tools/make_folds.py --aug_root "path/to/datasetA_aug" --n_folds 5
-
-# 3. 训练 (fold_0)
-python tools/train_camplus_finetune.py --aug_root "path/to/datasetA_aug" \
-    --fold 0 --epochs 10 --batch 64 --workers 8
-
-# 4. 验证折无偏评估
-python tools/eval_fold0_nosep.py
+```powershell
+.\.venv\Scripts\python.exe tools\download_spexplus.py
 ```
 
-## 目录结构
+检查点保存位置：
 
+`pretrained/spex_plus/checkpoint.pth`
+
+固定 SHA256：
+
+`2d6a2f2b404fd18a809eb82052fd64ef0bd986f410b1043bc666b54121e44b5c`
+
+## 运行
+
+单样本：
+
+```powershell
+.\.venv\Scripts\python.exe run_inference.py `
+  --kws "path\to\kws.wav" `
+  --cmd "path\to\cmd.wav" `
+  --label "目标文本" `
+  --output "results\spex_plus\single.json"
 ```
-voice_pipeline/
-├── run_inference.py      # 推理入口
-├── pipeline.py           # 流水线核心 (降噪→声纹→ASR)
-├── config.py             # 配置加载
-├── configs/default.yaml  # 配置 (微调权重+阈值0.67+V5.1选择性分离)
-├── modules/              # 模型模块
-│   ├── denoiser.py       #   降噪 (noisereduce)
-│   ├── separator.py      #   分离 (SepFormer, V5.1选择性触发)
-│   ├── voiceprint.py     #   声纹 (CAM++, 支持微调权重)
-│   └── asr.py            #   ASR (Paraformer)
-├── utils/                # 音频/指标工具
-├── tools/                # 数据增强/训练/评估脚本
-├── finetuned_models/     # 微调声纹模型 (随仓库提供)
-├── pretrained/           # 预训练模型 (运行时下载, 不上传)
-└── results/              # 推理结果 (不上传)
+
+完整 datasetA：
+
+```powershell
+.\.venv\Scripts\python.exe run_inference.py `
+  --config configs\default.yaml `
+  --data_root "path\to\datasetA" `
+  --split all `
+  --output "results\spex_plus\datasetA_spexplus_submission.json" `
+  --checkpoint "results\spex_plus\datasetA_spexplus_checkpoint.json"
 ```
 
-## 比赛评分
+输出 JSON 顶层严格为：
 
-- **CER 40%**: pos 样本字错误率（micro-average，拒识按删除错误）
-- **RR 40%**: neg 样本拒识率
-- **效率 20%**: 推理时间 10% + 内存 10%（禁分离比 V4.1 省时约 27%）
+```json
+{
+  "result": {
+    "results": [],
+    "final_cer": "0.0000",
+    "duration": "0.00"
+  }
+}
+```
 
-## 历史版本
+## 关键文件
 
-- **V5.1**（当前）: 微调声纹 + 选择性分离（保留分离能力），Score 0.5914（fold_0 无偏）
-- **V5**: 微调声纹 + 禁分离，Score 0.5936（fold_0 无偏）
-- **V4.1**: 预训练声纹 + 自适应分离 + 双阈值，Score 0.5452
-- **V3**: 全量分离（能量法选轨缺陷），Score 0.5285
-- **V2**: 无分离基线，Score 0.5404
+```text
+configs/default.yaml                 SpEx+ 最终运行配置
+modules/spexplus_separator.py        SpEx+ 网络与流水线适配器
+modules/separator.py                 分离/提取模型工厂
+pipeline.py                          完整推理流水线
+tools/download_spexplus.py           权重下载与SHA256校验
+experiment_logs/spex_plus_test.log   最终实验记录
+```
+
+`pretrained/`、`results/`、虚拟环境和缓存均不进入 Git 提交。项目保留
+原流水线的通用组件及队友原有文件，但不包含其他候选分离模型的新增配置、
+权重、下载脚本或实验结果。

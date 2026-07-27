@@ -39,8 +39,7 @@ V4.1 更新 (2026-07-19):
   }
 """
 import os
-# 设置 HuggingFace 镜像站 (国内网络优化)
-os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')
+# Hugging Face 下载端点由环境变量 HF_ENDPOINT 控制，不在代码中强制覆盖。
 # 禁用 xet 后端 (Windows 上 401 Unauthorized)
 os.environ.setdefault('HF_HUB_DISABLE_XET', '1')
 os.environ.setdefault('HF_HUB_DISABLE_SYMLINKS_WARNING', '1')
@@ -74,6 +73,7 @@ class VoicePipeline:
     def __init__(self, config: PipelineConfig):
         self.config = config
         self.device = config.device
+        self.separator_model_name = config.separation.get("model", "passthrough")
 
         # 初始化各模块 (延迟加载)
         self.denoiser: BaseDenoiser = create_denoiser(config.denoise, self.device)
@@ -116,6 +116,11 @@ class VoicePipeline:
         # 1. 声纹提取器 (最先加载, 其他模块可能依赖)
         print("\n[1/4] 加载声纹提取模型...")
         self.voiceprint_extractor.load()
+        if self.config.voiceprint.get("enable", True) and self.voiceprint_extractor.model is None:
+            raise RuntimeError(
+                f"声纹模型 {self.config.voiceprint.get('model')} 加载失败，"
+                "已停止流水线，防止使用零向量产生无效结果"
+            )
 
         # 2. 降噪模型
         print("\n[2/4] 加载降噪模型...")
@@ -123,11 +128,26 @@ class VoicePipeline:
 
         # 3. 人声分离模型
         print("\n[3/4] 加载人声分离模型...")
+        print(f"  当前分离模型: {self.separator_model_name}")
         self.separator.load()
+        if (
+            self.separation_enabled
+            and self.separator_model_name not in ("passthrough", "none")
+            and self.separator.model is None
+        ):
+            raise RuntimeError(
+                f"分离模型 {self.separator_model_name} 加载失败，"
+                "已停止流水线，防止静默退化为直通"
+            )
 
         # 4. ASR 模型
         print("\n[4/4] 加载语音识别模型...")
         self.asr.load()
+        if self.config.asr.get("enable", True) and self.asr.model is None:
+            raise RuntimeError(
+                f"ASR 模型 {self.config.asr.get('model')} 加载失败，"
+                "已停止流水线，防止输出空识别结果"
+            )
 
         self._models_loaded = True
         print("\n" + "=" * 60)
@@ -243,8 +263,13 @@ class VoicePipeline:
 
         if self.separation_enabled and self.sep_trigger_min <= sim_denoised < self.vp_threshold:
             # 检测到干扰: 降噪音频声纹相似度不足, 尝试分离
+            # 目标提取模型需要原始唤醒音频作为参考；盲分离模型此调用为空操作。
+            self.separator.set_reference_audio(kws_audio, sr)
             separated_audio, sources = self.separator.separate(denoised_audio, sr)
-            if len(sources) > 1:
+            if sources and (
+                len(sources) > 1
+                or getattr(self.separator, "is_target_extractor", False)
+            ):
                 all_sources = sources
                 separation_used = True
                 # 声纹辅助选轨: 对每条分离音轨提声纹, 选与 kws 最相似的
@@ -326,6 +351,9 @@ class VoicePipeline:
             "cer": f"{cer:.4f}" if cer is not None else "",
             "similarity": f"{similarity:.4f}",
             "is_target": is_target,
+            "separation_model": self.separator_model_name,
+            "separation_used": separation_used,
+            "separated_source_count": len(all_sources),
             "stages_time": stages_time,
         }
 

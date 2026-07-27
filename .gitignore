@@ -1,5 +1,14 @@
 # === 模型权重 (2.4GB+, 运行时从 ModelScope/HuggingFace 自动下载) ===
-pretrained/
+pretrained/*
+!pretrained/gtcrn/
+
+# === 虚拟环境 ===
+.venv/
+
+# === 本地虚拟环境与安装包缓存 ===
+.venv/
+.venv.*/
+*.whl
 
 # === Python 缓存 ===
 __pycache__/
@@ -11,6 +20,11 @@ __pycache__/
 
 # === 推理结果与日志 (运行产物, 不上传) ===
 results/
+*.log
+
+# 最终SpEx+实验日志需要随分支一同提交
+!experiment_logs/
+!experiment_logs/spex_plus_test.log
 
 # === 训练运行输出 (checkpoint/日志, 不上传; 最终模型在 finetuned_models/) ===
 runs/

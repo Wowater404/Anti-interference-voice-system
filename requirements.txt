@@ -17,10 +17,14 @@ PyYAML>=6.0
 # --- Stage 1: 降噪模型 ---
 # DeepFilterNet3 (主选, 轻量实时)
 deepfilternet>=0.5.0
+# 当前默认配置使用频谱门限降噪
+noisereduce>=3.0.0
 
 # --- Stage 2: 人声分离 ---
 # SpeechBrain (SepFormer + ECAPA-TDNN)
 speechbrain>=1.0.0
+# SpEx+ 网络结构已随项目提供，仅依赖 torch/torchaudio；
+# 官方检查点由 tools/download_spexplus.py 下载并校验。
 
 # --- Stage 3: 声纹鉴别 ---
 # 3DSpeaker / CAM++ (ModelScope)
@@ -29,6 +33,7 @@ modelscope>=1.9.0
 # --- Stage 4: 语音识别 ---
 # FunASR (Paraformer)
 funasr>=1.0.0
+editdistance>=0.8.0
 # Whisper (备选)
 openai-whisper>=20231117
 # SherpaONNX (轻量备选)
@@ -38,6 +43,7 @@ sherpa-onnx>=1.10.0
 tqdm>=4.65.0
 librosa>=0.10.0
 soundfile>=0.12.0
+gdown>=5.2.0
 
 # ===========================================================================
 # 模型说明:

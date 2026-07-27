@@ -19,21 +19,37 @@ import numpy as np
 from typing import Optional, Tuple
 import sys
 
-# === PyTorch 2.5 兼容性修复 ===
-# modelscope/transformers 需要 FSDP2 API (CPUOffloadPolicy, MixedPrecisionPolicy),
-# 但 PyTorch 2.5.1 的 fsdp 顶层模块未导出这些类 (仅在内部子模块中存在)
-# 添加占位类使 modelscope.pipelines / transformers 能正常导入
-import torch.distributed.fsdp as _fsdp
-if not hasattr(_fsdp, 'CPUOffloadPolicy'):
-    class _CPUOffloadPolicy:
-        def __init__(self, *args, **kwargs):
-            pass
-    _fsdp.CPUOffloadPolicy = _CPUOffloadPolicy
-if not hasattr(_fsdp, 'MixedPrecisionPolicy'):
-    class _MixedPrecisionPolicy:
-        def __init__(self, *args, **kwargs):
-            pass
-    _fsdp.MixedPrecisionPolicy = _MixedPrecisionPolicy
+# === 旧版 PyTorch 2.5 兼容性修复 ===
+# modelscope/transformers 的旧版本需要 FSDP2 API
+# (CPUOffloadPolicy, MixedPrecisionPolicy)，但 PyTorch 2.5.1 的 fsdp
+# 顶层模块未导出这些类。PyTorch 2.6+ 已不需要这个补丁，而且主动导入
+# FSDP 会触发 SpeechBrain 可选依赖的延迟导入，因此仅在 2.5 及更旧版本启用。
+try:
+    import torch
+
+    torch_version = tuple(
+        int(part) for part in torch.__version__.split("+", 1)[0].split(".")[:2]
+    )
+    if torch_version <= (2, 5):
+        import torch.distributed.fsdp as _fsdp
+
+        if not hasattr(_fsdp, "CPUOffloadPolicy"):
+            class _CPUOffloadPolicy:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            _fsdp.CPUOffloadPolicy = _CPUOffloadPolicy
+
+        if not hasattr(_fsdp, "MixedPrecisionPolicy"):
+            class _MixedPrecisionPolicy:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            _fsdp.MixedPrecisionPolicy = _MixedPrecisionPolicy
+except (ImportError, ValueError):
+    # torch 尚未安装或版本字符串无法解析时，不阻断模块导入；
+    # 后续模型 load() 会给出实际依赖错误。
+    pass
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

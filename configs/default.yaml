@@ -82,12 +82,12 @@ voiceprint:
     # 3DSpeaker 框架, 需安装 modelscope
     model_id: iic/speech_campplus_sv_zh-cn_16k-common
     embedding_dim: 192
-    # 本次SpEx+测试使用官方预训练CAM++，不加载datasetA微调权重。
-    finetuned_path: null
+    # GTCRN降噪+增强datasetA微调, fold_0 val_EER=0.0643
+    finetuned_path: runs/fold_0/camplus_finetuned_best.pt
   wespeaker:
     checkpoint: null
   # 鉴别阈值: cosine similarity 低于此值则拒识
-  threshold: 0.28
+  threshold: 0.72
   enable: true
 
 # ===========================================================================

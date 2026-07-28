@@ -3,9 +3,10 @@ Stage 4: 语音识别模块 (ASR)
 对通过声纹鉴别的目标说话人音频进行文字识别
 
 支持模型:
-  - Paraformer (FunASR): 阿里开源, 中文非自回归 ASR, 速度快
-  - Whisper (OpenAI):    多语言, 鲁棒性好, 但较慢
-  - SherpaONNX:          ONNX 推理, 极轻量
+  - SenseVoice (ModelScope/iic): 与 CAM++ 同属 iic 生态, 非自回归, 15x实时速度
+  - Paraformer (FunASR):         阿里开源, 中文非自回归 ASR, 速度快
+  - Whisper (OpenAI):            多语言, 鲁棒性好, 但较慢
+  - SherpaONNX:                  ONNX 推理, 极轻量
 
 输入: 目标说话人音频 (np.ndarray, float32, [-1,1])
 输出: 识别文本 (str)
@@ -41,6 +42,115 @@ class BaseASR:
             识别文本
         """
         raise NotImplementedError
+
+
+class SenseVoiceASR(BaseASR):
+    """
+    SenseVoice 语音识别器 (ModelScope/iic)
+    - 与 CAM++ 同属 iic 生态, 通过 modelscope 下载模型
+    - 非自回归端到端架构, 10秒音频仅需70ms推理 (15x实时速度)
+    - 支持语音识别(ASR) + 语种识别 + 情感识别 + 声学事件检测
+    - 模型: iic/SenseVoiceSmall
+    - 安装: pip install funasr modelscope
+
+    I/O 契约:
+      输入: audio [N] float32, 值域[-1,1], sr=16000
+      输出: str, 识别文本 (经 rich_transcription_postprocess 去除特殊标签)
+    """
+
+    def __init__(self, device: str = "cpu",
+                 model_id: str = "iic/SenseVoiceSmall",
+                 vad_model: str = "fsmn-vad",
+                 language: str = "zh",
+                 use_itn: bool = True):
+        super().__init__(device)
+        self.model_id = model_id
+        self.vad_model = vad_model
+        self.language = language
+        self.use_itn = use_itn
+
+    def load(self):
+        """加载 SenseVoice 模型 (通过 modelscope 下载, funasr 推理)"""
+        try:
+            from modelscope import snapshot_download
+            from funasr import AutoModel
+
+            model_dir = snapshot_download(self.model_id)
+            os.environ.setdefault('MODELSCOPE_CACHE',
+                                  os.path.join(PROJECT_ROOT, 'pretrained', 'modelscope_cache'))
+
+            model_kwargs = {
+                "model": model_dir,
+                "trust_remote_code": True,
+                "device": self.device,
+            }
+
+            if self.vad_model:
+                model_kwargs["vad_model"] = self.vad_model
+                model_kwargs["vad_kwargs"] = {"max_single_segment_time": 30000}
+
+            self.model = AutoModel(**model_kwargs)
+            self._loaded = True
+            print(f"[SenseVoice] 模型加载成功 ({self.model_id})")
+        except ImportError:
+            print("[SenseVoice] 警告: funasr/modelscope 未安装, 使用直通模式")
+            print("  安装命令: pip install funasr modelscope")
+            self._loaded = True
+        except Exception as e:
+            print(f"[SenseVoice] 加载失败: {e}")
+            print("[SenseVoice] 使用直通模式")
+            self._loaded = True
+
+    def transcribe(self, audio: np.ndarray, sr: int = 16000) -> str:
+        """
+        SenseVoice 语音识别 (非自回归, 极速)
+
+        内部流程: 音频→临时WAV文件→FunASR.generate→rich_transcription_postprocess→返回
+
+        Args:
+            audio: np.ndarray [N], float32, 目标说话人音频波形, 值域[-1,1], 16kHz单声道
+            sr: int, 采样率 (默认16000)
+
+        Returns:
+            text: str, 识别出的文本 (经 rich_transcription_postprocess 去除特殊标签)
+                  (若模型未加载或识别失败则返回空字符串"")
+        """
+        if not self._loaded:
+            self.load()
+
+        if self.model is None:
+            return ""
+
+        import tempfile
+        from utils.audio import save_wav
+
+        # FunASR 需要文件路径输入
+        tmp_path = os.path.join(tempfile.gettempdir(), "sensevoice_tmp.wav")
+        save_wav(tmp_path, audio, sr)
+
+        try:
+            result = self.model.generate(
+                input=tmp_path,
+                cache={},
+                language=self.language,
+                use_itn=self.use_itn,
+                batch_size_s=300,
+                merge_vad=True,
+                merge_length_s=15,
+            )
+            try:
+                from funasr.utils.postprocess_utils import rich_transcription_postprocess
+                text = rich_transcription_postprocess(result[0]["text"]) if result else ""
+            except ImportError:
+                text = result[0]["text"] if result else ""
+        except Exception as e:
+            print(f"[SenseVoice] 识别错误: {e}")
+            text = ""
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+        return text
 
 
 class ParaformerASR(BaseASR):
@@ -257,9 +367,18 @@ def create_asr(config: dict, device: str = "cpu") -> BaseASR:
     Returns:
         BaseASR 子类实例 (ParaformerASR / WhisperASR / SherpaONNXASR)
     """
-    model_name = config.get("model", "paraformer")
+    model_name = config.get("model", "sensevoice")
 
-    if model_name == "paraformer":
+    if model_name == "sensevoice":
+        cfg = config.get("sensevoice", {})
+        return SenseVoiceASR(
+            device=device,
+            model_id=cfg.get("model_id", "iic/SenseVoiceSmall"),
+            vad_model=cfg.get("vad_model", "fsmn-vad"),
+            language=cfg.get("language", "zh"),
+            use_itn=cfg.get("use_itn", True),
+        )
+    elif model_name == "paraformer":
         cfg = config.get("paraformer", {})
         return ParaformerASR(
             device=device,
@@ -284,5 +403,5 @@ def create_asr(config: dict, device: str = "cpu") -> BaseASR:
             tokens=cfg.get("tokens"),
         )
     else:
-        print(f"[ASR] 未知模型 {model_name}, 使用 Paraformer")
-        return ParaformerASR(device=device)
+        print(f"[ASR] 未知模型 {model_name}, 使用 SenseVoice")
+        return SenseVoiceASR(device=device)

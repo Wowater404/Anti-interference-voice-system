@@ -94,10 +94,21 @@ voiceprint:
 # Stage 4: 语音识别 (ASR)
 # ===========================================================================
 asr:
-  # 主选: Paraformer (FunASR) — 阿里开源, 中文识别 SOTA, 非自回归速度快
-  # 备选: Whisper (small/base)  — 多语言, 鲁棒性好但较慢
-  #       SherpaONNX            — ONNX 推理, 极轻量
+  # 主选: Paraformer (FunASR) — 中文识别 SOTA, 支持热词
+  # 备选: SenseVoice (ModelScope/iic) — 与 CAM++ 同属 iic 生态, 非自回归极速推理
+  #       Whisper (small/base)        — 多语言, 鲁棒性好但较慢
+  #       SherpaONNX                  — ONNX 推理, 极轻量
   model: paraformer
+  sensevoice:
+    # ModelScope iic 模型, 与 CAM++ 同生态 (iic/speech_campplus_sv_zh-cn_16k-common)
+    # 非自回归端到端, 10秒音频70ms推理, 15x实时速度
+    # 支持语音识别 + 语种识别 + 情感识别 + 声学事件检测
+    model_id: iic/SenseVoiceSmall
+    vad_model: fsmn-vad
+    language: zh
+    # 逆文本正则化: false=保留中文数字格式(二十五), true=转阿拉伯数字(25)
+    # 标签用中文数字 → 设 false 匹配标签格式, 降低 CER
+    use_itn: false
   paraformer:
     # FunASR AutoModel 自动下载
     model_name: paraformer-zh

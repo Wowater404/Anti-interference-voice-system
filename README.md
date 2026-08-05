@@ -21,7 +21,7 @@
 
 | 配置 | CER | RR | Score | 推理时间 |
 |------|-----|-----|-------|---------|
-| V5 (noisereduce + Paraformer + noisereduce微调声纹) | 0.4527 | 0.9368 | 0.5936 | 423s |
+| V5 (noisereduce + Paraformer + noisereduce微调声纹) | 0.4527 | 0.9368 | 0.5936 | 776s |
 | V6 含SpEx+ (GTCRN + SpEx+ + Paraformer + GTCRN微调声纹, thr=0.72) | 0.4661 | 0.9620 | 0.5984 | 811s |
 | **V6 禁SpEx+ (GTCRN + Paraformer + GTCRN微调声纹, thr=0.72)** | **0.4684** | **0.9873** | **0.6076** | 718s |
 

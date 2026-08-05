@@ -3,10 +3,11 @@ Stage 4: 语音识别模块 (ASR)
 对通过声纹鉴别的目标说话人音频进行文字识别
 
 支持模型:
-  - SenseVoice (ModelScope/iic): 与 CAM++ 同属 iic 生态, 非自回归, 15x实时速度
-  - Paraformer (FunASR):         阿里开源, 中文非自回归 ASR, 速度快
-  - Whisper (OpenAI):            多语言, 鲁棒性好, 但较慢
-  - SherpaONNX:                  ONNX 推理, 极轻量
+  - Fun-ASR-Nano-2512 (FunAudioLLM): 自回归 LLM 架构, SenseVoice+Qwen3-0.6B, 中文识别 SOTA
+  - SenseVoice (ModelScope/iic): 非自回归, 15x实时速度
+  - Paraformer (FunASR): 非自回归, 速度快
+  - Whisper (OpenAI): 多语言, 鲁棒性好, 但较慢
+  - SherpaONNX: ONNX 推理, 极轻量
 
 输入: 目标说话人音频 (np.ndarray, float32, [-1,1])
 输出: 识别文本 (str)
@@ -356,20 +357,120 @@ class SherpaONNXASR(BaseASR):
         return text
 
 
+class FunASRNanoASR(BaseASR):
+    """
+    Fun-ASR-Nano-2512 语音识别器 (FunAudioLLM)
+    - 自回归 LLM 架构: SenseVoice 编码器 + Qwen3-0.6B LLM 解码器, 800M 参数
+    - 中文识别 SOTA, CER 显著优于 Paraformer
+    - 不支持 batch decoding, 必须用 batch_size=1
+    - hotwords=None 会崩溃, 必须条件传参
+    - 输出字段: text_tn (ITN处理后无标点) 优先于 text (含标点)
+    - 安装: pip install funasr modelscope
+    """
+
+    def __init__(self, device: str = "cuda:0",
+                 model_dir: str = "FunAudioLLM/Fun-ASR-Nano-2512",
+                 language: str = "中文",
+                 hotwords=None):
+        super().__init__(device)
+        self.model_dir = model_dir
+        self.language = language
+        self.hotwords = hotwords
+
+    def load(self):
+        """加载 Fun-ASR-Nano-2512 模型"""
+        try:
+            from funasr import AutoModel
+
+            self.model = AutoModel(
+                model=self.model_dir,
+                device=self.device,
+                disable_update=True,
+            )
+            self._loaded = True
+            print(f"[Fun-ASR-Nano] 模型加载成功 ({self.model_dir})")
+        except ImportError:
+            print("[Fun-ASR-Nano] 警告: funasr 未安装, 使用直通模式")
+            print("  安装命令: pip install funasr modelscope")
+            self._loaded = True
+        except Exception as e:
+            print(f"[Fun-ASR-Nano] 加载失败: {e}")
+            print("[Fun-ASR-Nano] 使用直通模式")
+            self._loaded = True
+
+    def transcribe(self, audio: np.ndarray, sr: int = 16000) -> str:
+        """
+        Fun-ASR-Nano 语音识别 (自回归 LLM)
+
+        内部流程: 音频→临时WAV文件→FunASR.generate→提取text_tn→返回
+
+        Args:
+            audio: np.ndarray [N], float32, 目标说话人音频波形, 值域[-1,1], 16kHz单声道
+            sr: int, 采样率 (默认16000)
+
+        Returns:
+            text: str, 识别出的文本 (优先使用 text_tn 字段, 无标点)
+                  (若模型未加载或识别失败则返回空字符串"")
+        """
+        if not self._loaded:
+            self.load()
+
+        if self.model is None:
+            return ""
+
+        import tempfile
+        from utils.audio import save_wav
+
+        tmp_path = os.path.join(tempfile.gettempdir(), "funasr_nano_tmp.wav")
+        save_wav(tmp_path, audio, sr)
+
+        try:
+            gen_kwargs = {
+                "input": tmp_path,
+                "cache": {},
+                "batch_size": 1,
+                "language": self.language,
+            }
+            if self.hotwords is not None:
+                gen_kwargs["hotwords"] = self.hotwords
+
+            result = self.model.generate(**gen_kwargs)
+
+            text = ""
+            if result:
+                text = result[0].get("text_tn", "") or result[0].get("text", "")
+        except Exception as e:
+            print(f"[Fun-ASR-Nano] 识别错误: {e}")
+            text = ""
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+        return text
+
+
 def create_asr(config: dict, device: str = "cpu") -> BaseASR:
     """
     工厂函数: 根据配置创建 ASR 模型
 
     Args:
-        config: dict, asr配置字典 (含model/paraformer/whisper等字段)
+        config: dict, asr配置字典 (含model/fun_asr_nano/paraformer等字段)
         device: str, "cuda" 或 "cpu"
 
     Returns:
-        BaseASR 子类实例 (ParaformerASR / WhisperASR / SherpaONNXASR)
+        BaseASR 子类实例 (FunASRNanoASR / SenseVoiceASR / ParaformerASR / WhisperASR / SherpaONNXASR)
     """
-    model_name = config.get("model", "sensevoice")
+    model_name = config.get("model", "fun_asr_nano")
 
-    if model_name == "sensevoice":
+    if model_name == "fun_asr_nano":
+        cfg = config.get("fun_asr_nano", {})
+        return FunASRNanoASR(
+            device=cfg.get("device", "cuda:0" if device != "cpu" else "cpu"),
+            model_dir=cfg.get("model_dir", "FunAudioLLM/Fun-ASR-Nano-2512"),
+            language=cfg.get("language", "中文"),
+            hotwords=cfg.get("hotwords"),
+        )
+    elif model_name == "sensevoice":
         cfg = config.get("sensevoice", {})
         return SenseVoiceASR(
             device=device,

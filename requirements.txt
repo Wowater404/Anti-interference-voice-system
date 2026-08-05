@@ -27,17 +27,22 @@ speechbrain>=1.0.0
 # 官方检查点由 tools/download_spexplus.py 下载并校验。
 
 # --- Stage 3: 声纹鉴别 ---
-# 3DSpeaker / CAM++ (ModelScope)
+# 3DSpeaker / CAM++ / ERes2NetV2 (ModelScope)
 modelscope>=1.9.0
+# ResNetSE (WeSpeaker, sherpa-onnx ONNX 推理)
+sherpa-onnx>=1.10.0
 
 # --- Stage 4: 语音识别 ---
-# FunASR (Paraformer)
+# FunASR (Fun-ASR-Nano-2512 / Paraformer)
 funasr>=1.0.0
 editdistance>=0.8.0
 # Whisper (备选)
 openai-whisper>=20231117
-# SherpaONNX (轻量备选)
-sherpa-onnx>=1.10.0
+
+# --- 文本归一化 ---
+# 简繁转换 + 阿拉伯数字转中文 (ASR 输出归一化)
+opencc-python-reimplemented>=0.1.7
+cn2an>=0.5.0
 
 # --- 工具 ---
 tqdm>=4.65.0
@@ -48,10 +53,11 @@ gdown>=5.2.0
 # ===========================================================================
 # 模型说明:
 # ===========================================================================
-# | 阶段     | 主选模型              | 备选模型              | 安装方式          |
-# |----------|----------------------|----------------------|------------------|
-# | 降噪     | DeepFilterNet3       | FullSubNet+          | pip install df   |
-# | 人声分离  | SepFormer(SpeechBrain)| TF-GridNet / SpEx+  | pip install sb   |
-# | 声纹鉴别  | ECAPA-TDNN(SpeechBrain)| CAM++(3DSpeaker)   | pip install sb   |
-# | 语音识别  | Paraformer(FunASR)   | Whisper / SherpaONNX | pip install fun  |
+# | 阶段     | 主选模型                         | 备选模型              |
+# |----------|---------------------------------|----------------------|
+# | 降噪     | GTCRN (48K参数, 复数域mask)      | noisereduce          |
+# | 人声分离  | SpEx+ (目标说话人提取)            | SepFormer             |
+# | 声纹鉴别  | 3-model Z-score Ensemble        | CAM++ / ERes2NetV2    |
+# |          | (CAM++ + ERes2NetV2 + ResNetSE) | / ResNetSE / ECAPA    |
+# | 语音识别  | Fun-ASR-Nano-2512 (自回归 LLM)   | Paraformer / Whisper  |
 # ===========================================================================

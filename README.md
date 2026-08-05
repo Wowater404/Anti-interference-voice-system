@@ -1,97 +1,53 @@
-# 抗干扰语音指令识别系统 - V6 (GTCRN + SpEx+ + CAM++微调 + Paraformer)
+# 抗干扰语音指令识别系统 - 全预训练版本
 
-三组模型更换后的集成版本。流水线：
+流水线（全部使用官方预训练权重，无微调产物入库）：
 
-`GTCRN → (SpEx+ 可选) → CAM++(微调) → Paraformer`
+`GTCRN → (SpEx+ 可选) → CAM++(预训练) → Paraformer`
 
-> **当前版本**: V6（GTCRN降噪 + SpEx+分离 + GTCRN微调声纹 + Paraformer ASR）
-> **最优配置**: 禁分离, thr=0.72, Score=0.6076
-> **含分离**: thr=0.72, Score=0.5984
+> **当前状态**: 全预训练。声纹微调产物不随仓库上传（见 .gitignore），最后阶段微调后另行提交。
+> **实测 (datasetA, 含SpEx+)**: thr=0.25, CER=0.6533, RR=0.9198, Score(80分制)=0.5066
 
-## 性能对比 (datasetA)
+## 性能对比 (datasetA, 全部 80分制 = CER×40 + RR×40)
 
-### 全预训练 (无微调)
+| 配置 | 阈值 | CER | RR | Score | 推理时间 |
+|------|------|-----|-----|-------|---------|
+| **当前仓库 (GTCRN + SpEx+ + 预训练声纹 + Paraformer)** | 0.25 | 0.6533 | 0.9198 | **50.66** | 632s |
+| V2 基线 (noisereduce + Paraformer + 预训练声纹) | 0.28 | 0.5833 | 0.9367 | 54.14 | 423s(CPU) |
 
-| 配置 | CER | RR | Score |
-|------|-----|-----|-------|
-| V2 基线 (noisereduce + Paraformer + 预训练声纹) | 0.5857 | 0.9367 | 0.5404 |
-| V6 预训练 (GTCRN + SpEx+ + Paraformer + 预训练声纹) | 0.6990 | 0.9409 | 0.4968 |
-
-### 声纹微调后
-
-| 配置 | CER | RR | Score | 推理时间 |
-|------|-----|-----|-------|---------|
-| V5 (noisereduce + Paraformer + noisereduce微调声纹) | 0.4527 | 0.9368 | 0.5936 | 776s |
-| V6 含SpEx+ (GTCRN + SpEx+ + Paraformer + GTCRN微调声纹, thr=0.72) | 0.4661 | 0.9620 | 0.5984 | 811s |
-| **V6 禁SpEx+ (GTCRN + Paraformer + GTCRN微调声纹, thr=0.72)** | **0.4684** | **0.9873** | **0.6076** | 718s |
-
-### 消融对比
-
-| 消融维度 | 含分离 | 禁分离 | 差异 |
-|---------|--------|--------|------|
-| Score | 0.5984 | 0.6076 | 禁分离 +0.009 |
-| RR | 0.9620 | 0.9873 | 禁分离后 neg 假接受减半 |
-| 推理时间 | 811s | 718s | 禁分离快 11% |
+> 预训练声纹在 GTCRN 分布上区分力较弱（最优阈值 0.25，pos 接受率 55.5%）。
+> 微调声纹可提升约 10 分（实测 59.84~60.76），将在最后阶段实施。
 
 ## 模型选型
 
 | 模块 | 模型 | 版本说明 |
 |------|------|---------|
-| 降噪 | **GTCRN** (48K参数, 复数域mask, dns3 checkpoint) | 替代 noisereduce |
-| 分离 | **SpEx+** 16kHz 目标说话人提取 | 替代 SepFormer, 可选启用 |
-| 声纹 | **CAM++** 微调 (fold_0, val_EER=0.0643) | datasetA 8倍增强 + GTCRN降噪下微调 |
-| ASR | **Paraformer** (FunASR, 热词增强) | 保留, SenseVoice 备选 |
+| 降噪 | **GTCRN** (48K参数, 复数域mask, dns3 checkpoint) | 官方预训练, 随仓库上传 |
+| 分离 | **SpEx+** 16kHz 目标说话人提取 | 可选启用, 权重运行时加载 |
+| 声纹 | **CAM++** (3DSpeaker/ModelScope) | 官方预训练, 运行时自动下载 |
+| ASR | **Paraformer** (FunASR, 热词增强) | 官方预训练, 运行时自动下载 |
 
-## 声纹微调
+## 关键说明
 
-- 训练脚本: `tools/train_camplus_finetune.py`
-- 增强数据: `datasetA_aug` (14704条 cmd 已 GTCRN 降噪预处理)
-- 训练配置: fold_0, 10 epochs, 双向margin损失, 1:1平衡采样
-- 最佳模型: `runs/fold_0/camplus_finetuned_best.pt` (Epoch 7, val_EER=0.0643)
-- 训练日志: `runs/fold_0/train_log.json`
-
-### 训练过程
-
-| Epoch | val_EER | pos_sim | 最佳 |
-|-------|---------|---------|:--:|
-| 基线 | 0.2138 | 0.263 | - |
-| 1 | 0.0748 | 0.755 | ★ |
-| 4 | 0.0661 | 0.793 | ★ |
-| 7 | 0.0643 | 0.832 | ★ |
-
-## 阈值扫描
-
-| thr | CER | RR | Score |
-|-----|-----|-----|-------|
-| 0.63 | 0.4628 | 0.9135 | 0.5803 |
-| 0.67 | 0.4631 | 0.9283 | 0.5861 |
-| 0.70 | 0.4652 | 0.9430 | 0.5912 |
-| **0.72** | **0.4661** | **0.9620** | **0.5984** |
-| 0.75 | 0.4811 | 0.9768 | 0.5983 |
-
-## 关键结论
-
-1. **声纹微调是最大杠杆**: 全预训练 0.4968 → 微调后 0.5984 (+0.10)
-2. **SpEx+分离在datasetA上是负资产**: 禁分离后 Score +0.009, 且推理快 11%
-3. **GTCRN+微调声纹组合优于旧版**: V6禁分离 0.6076 > V5 0.5936 (+0.014)
-4. **Paraformer与SenseVoice几乎打平**: 分别为 0.5984 vs 0.5988
+1. **当前为全预训练状态**: `voiceprint.cam_plus.finetuned_path = null`, 声纹使用官方预训练权重。
+2. **微调产物不入库**: `finetuned_models/` 和 `runs/` 均被 .gitignore 排除; 训练脚本 `tools/train_camplus_finetune.py` 保留可复现。
+3. **阈值**: 预训练模型最优 0.25 (datasetA 实测扫描); 若后续微调声纹, 需重新扫描阈值。
+4. **分离**: SpEx+ 保留启用 (datasetB 多人场景需要); datasetA 上禁分离实测可再 +1 分 (RR 0.9873)。
+5. **提交注意**: 官方 L20 环境需联网拉取预训练权重 (ModelScope/HF), 无法联网时需手动打包。
 
 ## 文件结构
 
 ```
 voice_pipeline/
-├── configs/default.yaml       # 主配置 (GTCRN + SpEx+ + CAM++微调 + Paraformer)
+├── configs/default.yaml       # 主配置 (全预训练)
 ├── pipeline.py                # 4阶段流水线
 ├── modules/
 │   ├── denoiser.py            # 降噪 (GTCRN/DeepFilterNet/noisereduce)
 │   ├── gtcrn.py               # GTCRN 降噪模型实现
 │   ├── separator.py           # 分离 (SpEx+/SepFormer/PassThrough)
 │   ├── spexplus_separator.py  # SpEx+ 目标说话人提取
-│   ├── voiceprint.py          # 声纹 (CAM++ 微调/ECAPA/WeSpeaker)
+│   ├── voiceprint.py          # 声纹 (CAM++/ECAPA/WeSpeaker)
 │   └── asr.py                 # ASR (Paraformer/SenseVoice/Whisper)
-├── finetuned_models/          # 微调模型权重
-├── runs/fold_0/               # 训练输出 (best.pt + log)
 ├── pretrained/gtcrn/          # GTCRN 预训练权重
-├── pretrained/spex_plus/      # SpEx+ 预训练权重
-└── tools/                     # 训练/评估/增强脚本
+├── tools/                     # 训练/评估/增强脚本
+└── results/                   # 推理结果 (不入库)
 ```

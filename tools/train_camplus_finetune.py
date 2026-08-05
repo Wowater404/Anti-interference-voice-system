@@ -21,7 +21,7 @@ CAM++ 声纹模型微调训练脚本 (V3: 双向margin + 1:1平衡采样 + cmd�
   4. 每 epoch 打印 embedding 跨样本 std, <0.01 自动报警停机
 
 训练/推理分布一致性:
-  - cmd 先降噪 (noisereduce stationary=True prop_decrease=0.8), kws 不降噪
+  - cmd 已用 GTCRN 批量降噪预处理 (dns3 checkpoint, CUDA), kws 不降噪
   - 与 pipeline Step1-2 预处理完全一致, 解决"训练原始/推理降噪"分布不匹配
 
 用法:
@@ -176,8 +176,7 @@ def _extract_fbank_one(args):
     """
     rel_path, data_root = args
     y, _ = sf.read(os.path.join(data_root, rel_path), dtype='float32')
-    if os.path.basename(rel_path).startswith('cmd_') and _nr_module is not None:
-        y = _nr_module.reduce_noise(y=y, sr=SR, stationary=True, prop_decrease=0.8)
+    # cmd 已用 GTCRN 批量降噪预处理, 无需运行时再降噪
     wav = torch.from_numpy(y.astype(np.float32)).unsqueeze(0)
     feat = Kaldi.fbank(wav, num_mel_bins=80)  # [T, 80]
     return rel_path, feat.numpy().astype(np.float32)

@@ -1,106 +1,53 @@
-# 抗干扰语音指令识别系统 - SpEx+ 最终版
+# 抗干扰语音指令识别系统 - 全预训练版本
 
-本分支在原 V5.1 流水线基础上，将多人语音处理阶段最终确定为
-**SpEx+ 16 kHz 目标说话人提取模型**。
+流水线（全部使用官方预训练权重，无微调产物入库）：
 
-流水线：
+`GTCRN → (SpEx+ 可选) → CAM++(预训练) → Paraformer`
 
-`noisereduce -> SpEx+ -> CAM++ -> Paraformer`
+> **当前状态**: 全预训练。声纹微调产物不随仓库上传（见 .gitignore），最后阶段微调后另行提交。
+> **实测 (datasetA, 含SpEx+)**: thr=0.25, CER=0.6533, RR=0.9198, Score(80分制)=0.5066
 
-SpEx+ 同时读取：
+## 性能对比 (datasetA, 全部 80分制 = CER×40 + RR×40)
 
-- 待识别的混合/指令音频；
-- 同一条样本的唤醒音频，作为目标说话人参考。
+| 配置 | 阈值 | CER | RR | Score | 推理时间 |
+|------|------|-----|-----|-------|---------|
+| **当前仓库 (GTCRN + SpEx+ + 预训练声纹 + Paraformer)** | 0.25 | 0.6533 | 0.9198 | **50.66** | 632s |
+| V2 基线 (noisereduce + Paraformer + 预训练声纹) | 0.28 | 0.5833 | 0.9367 | 54.14 | 423s(CPU) |
 
-模型直接输出一条目标说话人音轨。权重、配置或参考音频缺失时程序会
-立即停止，不会静默退化为直通音频。
+> 预训练声纹在 GTCRN 分布上区分力较弱（最优阈值 0.25，pos 接受率 55.5%）。
+> 微调声纹可提升约 10 分（实测 59.84~60.76），将在最后阶段实施。
 
-## 最终实验结果
+## 模型选型
 
-测试集：datasetA，共 1838 条（pos 1364 / neg 474）。
+| 模块 | 模型 | 版本说明 |
+|------|------|---------|
+| 降噪 | **GTCRN** (48K参数, 复数域mask, dns3 checkpoint) | 官方预训练, 随仓库上传 |
+| 分离 | **SpEx+** 16kHz 目标说话人提取 | 可选启用, 权重运行时加载 |
+| 声纹 | **CAM++** (3DSpeaker/ModelScope) | 官方预训练, 运行时自动下载 |
+| ASR | **Paraformer** (FunASR, 热词增强) | 官方预训练, 运行时自动下载 |
 
-| 指标 | 结果 |
-|---|---:|
-| CER | 0.5765 |
-| 拒识率 RR | 0.9346 |
-| 识别项得分 | 0.5432 |
-| 总推理时间 | 353.57 秒 |
-| SpEx+ 实际触发 | 761 条 |
-| 平均触发提取时间 | 0.0636 秒 |
-| 硬错误 | 0 |
+## 关键说明
 
-识别项得分不包含比赛的推理时间和内存效率项。完整、可复核记录见
-`experiment_logs/spex_plus_test.log`。
+1. **当前为全预训练状态**: `voiceprint.cam_plus.finetuned_path = null`, 声纹使用官方预训练权重。
+2. **微调产物不入库**: `finetuned_models/` 和 `runs/` 均被 .gitignore 排除; 训练脚本 `tools/train_camplus_finetune.py` 保留可复现。
+3. **阈值**: 预训练模型最优 0.25 (datasetA 实测扫描); 若后续微调声纹, 需重新扫描阈值。
+4. **分离**: SpEx+ 保留启用 (datasetB 多人场景需要); datasetA 上禁分离实测可再 +1 分 (RR 0.9873)。
+5. **提交注意**: 官方 L20 环境需联网拉取预训练权重 (ModelScope/HF), 无法联网时需手动打包。
 
-## 安装
+## 文件结构
 
-建议使用 Python 3.12、PyTorch 和 torchaudio 的匹配 CUDA 版本。
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
-
-下载并严格校验 SpEx+ 官方检查点：
-
-```powershell
-.\.venv\Scripts\python.exe tools\download_spexplus.py
+voice_pipeline/
+├── configs/default.yaml       # 主配置 (全预训练)
+├── pipeline.py                # 4阶段流水线
+├── modules/
+│   ├── denoiser.py            # 降噪 (GTCRN/DeepFilterNet/noisereduce)
+│   ├── gtcrn.py               # GTCRN 降噪模型实现
+│   ├── separator.py           # 分离 (SpEx+/SepFormer/PassThrough)
+│   ├── spexplus_separator.py  # SpEx+ 目标说话人提取
+│   ├── voiceprint.py          # 声纹 (CAM++/ECAPA/WeSpeaker)
+│   └── asr.py                 # ASR (Paraformer/SenseVoice/Whisper)
+├── pretrained/gtcrn/          # GTCRN 预训练权重
+├── tools/                     # 训练/评估/增强脚本
+└── results/                   # 推理结果 (不入库)
 ```
-
-检查点保存位置：
-
-`pretrained/spex_plus/checkpoint.pth`
-
-固定 SHA256：
-
-`2d6a2f2b404fd18a809eb82052fd64ef0bd986f410b1043bc666b54121e44b5c`
-
-## 运行
-
-单样本：
-
-```powershell
-.\.venv\Scripts\python.exe run_inference.py `
-  --kws "path\to\kws.wav" `
-  --cmd "path\to\cmd.wav" `
-  --label "目标文本" `
-  --output "results\spex_plus\single.json"
-```
-
-完整 datasetA：
-
-```powershell
-.\.venv\Scripts\python.exe run_inference.py `
-  --config configs\default.yaml `
-  --data_root "path\to\datasetA" `
-  --split all `
-  --output "results\spex_plus\datasetA_spexplus_submission.json" `
-  --checkpoint "results\spex_plus\datasetA_spexplus_checkpoint.json"
-```
-
-输出 JSON 顶层严格为：
-
-```json
-{
-  "result": {
-    "results": [],
-    "final_cer": "0.0000",
-    "duration": "0.00"
-  }
-}
-```
-
-## 关键文件
-
-```text
-configs/default.yaml                 SpEx+ 最终运行配置
-modules/spexplus_separator.py        SpEx+ 网络与流水线适配器
-modules/separator.py                 分离/提取模型工厂
-pipeline.py                          完整推理流水线
-tools/download_spexplus.py           权重下载与SHA256校验
-experiment_logs/spex_plus_test.log   最终实验记录
-```
-
-`pretrained/`、`results/`、虚拟环境和缓存均不进入 Git 提交。项目保留
-原流水线的通用组件及队友原有文件，但不包含其他候选分离模型的新增配置、
-权重、下载脚本或实验结果。

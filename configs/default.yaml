@@ -82,12 +82,14 @@ voiceprint:
     # 3DSpeaker 框架, 需安装 modelscope
     model_id: iic/speech_campplus_sv_zh-cn_16k-common
     embedding_dim: 192
-    # 本次SpEx+测试使用官方预训练CAM++，不加载datasetA微调权重。
+    # 当前为全预训练状态: finetuned_path=null 加载官方预训练权重
+    # (微调产物不入库, 最后阶段微调后再启用此字段)
     finetuned_path: null
   wespeaker:
     checkpoint: null
   # 鉴别阈值: cosine similarity 低于此值则拒识
-  threshold: 0.28
+  # 预训练模型最优阈值 0.25 (实测); 微调后需重新扫描
+  threshold: 0.25
   enable: true
 
 # ===========================================================================

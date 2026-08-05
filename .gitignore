@@ -26,8 +26,11 @@ results/
 !experiment_logs/
 !experiment_logs/spex_plus_test.log
 
-# === 训练运行输出 (checkpoint/日志, 不上传; 最终模型在 finetuned_models/) ===
+# === 训练运行输出 (checkpoint/日志, 不上传) ===
 runs/
+
+# === 微调产物 (权重/日志, 不上传; 仓库保持全预训练状态) ===
+finetuned_models/
 
 # === IDE 配置 ===
 .idea/

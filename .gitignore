@@ -2,6 +2,8 @@
 # GTCRN 权重体积小且无公开下载源，随仓库提交
 pretrained/*
 !pretrained/gtcrn/
+!pretrained/spex_plus/
+!pretrained/spex_plus/*
 
 # === 虚拟环境 ===
 .venv/

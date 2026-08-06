@@ -21,10 +21,20 @@ __pycache__/
 # === 推理结果与日志 (运行产物, 不上传) ===
 results/
 *.log
+experiment_logs/
 
-# 最终SpEx+实验日志需要随分支一同提交
-!experiment_logs/
-!experiment_logs/spex_plus_test.log
+# === 训练/分析脚本 (纯推理仓库, 不上传; 本地保留供最终微调) ===
+tools/train_camplus_finetune.py
+tools/train_all_folds.py
+tools/augment_dataset.py
+tools/make_folds.py
+tools/eval_*.py
+tools/quick_threshold_scan.py
+tools/simulate_sep_strategies.py
+analyze_*.py
+make_ppt.py
+run_full_inference.bat
+六模型评分计算.txt
 
 # === 训练运行输出 (checkpoint/日志, 不上传) ===
 runs/

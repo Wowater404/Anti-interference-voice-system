@@ -57,12 +57,12 @@ separation:
     expected_sha256: 2d6a2f2b404fd18a809eb82052fd64ef0bd986f410b1043bc666b54121e44b5c
     # 权重缺失或校验失败时直接停止，禁止静默退化为直通模式。
     allow_fallback: false
-  # 与本次datasetA正式记录完全一致的阈值。
+  # SpEx+ 最佳实验参数；仅约束分离后结果，不改变其他模型参数。
   enable: true
   max_speakers: 2              # 比赛说明: 同一时间最多2个说话人
-  vp_threshold_separated: 0.35
+  vp_threshold_separated: 0.2805
   sep_trigger_min: 0.0
-  sim_jump_cap: 1.0
+  sim_jump_cap: 0.0625
   # 以下两个开关在自适应模式下忽略 (保留供非自适应实验):
   voiceprint_use_separated: false # (自适应模式下忽略)
   asr_use_separated: true         # (自适应模式下忽略)

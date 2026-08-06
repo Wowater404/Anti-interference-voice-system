@@ -1,0 +1,85 @@
+{
+  "name": "config",
+  "n_gpu": 1,
+  "preprocessing": {
+    "sr": 16000,
+    "spectrogram": {
+      "type": "MelSpectrogram",
+      "args": {
+      }
+    },
+    "log_spec": false
+  },
+  "augmentations": {
+    "wave": [],
+    "spectrogram": []
+  },
+  "arch": {
+    "type": "SpexPlus",
+    "args": {
+      "num_spks": 90
+    }
+  },
+  "data": {
+    "test": {
+      "batch_size": 1,
+      "num_workers": 0,
+      "datasets": [
+        {
+          "type": "LibrispeechDataset",
+          "args": {
+            "part": "test-clean",
+            "num_speakers": 30,
+            "dataset_size": 300,
+            "audio_len": 3,
+            "limit": 300
+          }
+        }
+      ]
+    }
+  },
+  "optimizer": {
+    "type": "Adam",
+    "args": {
+      "lr": 1e-3,
+      "weight_decay": 1e-5
+    }
+  },
+  "loss": {
+    "type": "SpexLoss",
+    "args": {}
+  },
+  "metrics": [
+    {
+      "type": "SiSdrMetric",
+      "args": {
+        "name": "Si-Sdr"
+      }
+    },
+    {
+      "type": "PESQMetric",
+      "args": {
+        "name": "PESQ"
+      }
+    }
+  ],
+  "lr_scheduler": {
+    "type": "ReduceLROnPlateau",
+    "args": {
+      "factor": 0.5,
+      "patience": 2000
+    }
+  },
+  "trainer": {
+    "epochs": 200,
+    "save_dir": "saved/",
+    "save_period": 5,
+    "verbosity": 2,
+    "monitor": "min val_loss",
+    "early_stop": 6000,
+    "visualize": "wandb",
+    "wandb_project": "speech_separation_project",
+    "grad_norm_clip": 10,
+    "len_epoch": 1000
+  }
+}

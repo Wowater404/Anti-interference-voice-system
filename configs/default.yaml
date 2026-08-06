@@ -71,10 +71,15 @@ separation:
 # Stage 3: 声纹鉴别
 # ===========================================================================
 voiceprint:
-  # 主选: CAM++ (3DSpeaker/ModelScope) — 阿里开源, 中文场景优化, 国内下载稳定
-  # 备选: ECAPA-TDNN (SpeechBrain)   — VoxCeleb预训练, 需HuggingFace
-  #       WeSpeaker                    — Wenet 团队, 轻量高效
-  model: cam_plus
+  # 主选: 3-model Z-score Ensemble (CAM++ + ERes2NetV2 + ResNetSE)
+  # 备选: CAM++ / ERes2NetV2 / ResNetSE (单模型)
+  #       ECAPA-TDNN (SpeechBrain, 需 HuggingFace)
+  model: ensemble
+  ensemble:
+    # 三模型 Z-score 加权融合, datasetA 最优方案
+    # 80分=59.33, 100分=74.58, CER=0.4365, RR=0.9198
+    weights: [0.4, 0.4, 0.2]    # CAM++ / ERes2NetV2 / ResNetSE
+    threshold: -0.17            # Z-score 空间阈值
   ecapa_tdnn:
     huggingface_repo: speechbrain/spkrec-ecapa-voxceleb
     embedding_dim: 192
@@ -82,43 +87,50 @@ voiceprint:
     # 3DSpeaker 框架, 需安装 modelscope
     model_id: iic/speech_campplus_sv_zh-cn_16k-common
     embedding_dim: 192
-    # 当前为全预训练状态: finetuned_path=null 加载官方预训练权重
-    # (微调产物不入库, 最后阶段微调后再启用此字段)
     finetuned_path: null
-  wespeaker:
-    checkpoint: null
-  # 鉴别阈值: cosine similarity 低于此值则拒识
-  # 预训练模型最优阈值 0.25 (实测); 微调后需重新扫描
-  threshold: 0.25
+  eres2netv2:
+    # 增强残差网络, 需安装 modelscope
+    model_id: iic/speech_eres2netv2_sv_zh-cn_16k-common
+    embedding_dim: 192
+  resnetse:
+    # WeSpeaker ResNet34, sherpa-onnx 推理, CN-Celeb 训练
+    model_path: pretrained/wespeaker_resnet34/wespeaker_zh_cnceleb_resnet34.onnx
+    num_threads: 4
+    embedding_dim: 256
+  # 单模型模式下的鉴别阈值 (ensemble 模式使用 ensemble.threshold)
+  threshold: 0.28
   enable: true
 
 # ===========================================================================
 # Stage 4: 语音识别 (ASR)
 # ===========================================================================
 asr:
-  # 主选: Paraformer (FunASR) — 中文识别 SOTA, 支持热词
-  # 备选: SenseVoice (ModelScope/iic) — 与 CAM++ 同属 iic 生态, 非自回归极速推理
-  #       Whisper (small/base)        — 多语言, 鲁棒性好但较慢
-  #       SherpaONNX                  — ONNX 推理, 极轻量
-  model: paraformer
+  # 主选: Fun-ASR-Nano-2512 (FunAudioLLM) — 自回归 LLM, 中文识别 SOTA
+  # 备选: Paraformer (FunASR) — 非自回归, 速度快
+  #       SenseVoice (ModelScope/iic) — 非自回归极速推理
+  #       Whisper (OpenAI) — 多语言, 鲁棒性好但较慢
+  #       SherpaONNX — ONNX 推理, 极轻量
+  model: fun_asr_nano
+  fun_asr_nano:
+    # Fun-ASR-Nano-2512: SenseVoice 编码器 + Qwen3-0.6B LLM 解码器, 800M 参数
+    # 不支持 batch decoding, 必须用 batch_size=1
+    # hotwords=None 会崩溃, 设为 null 时不传 hotwords 参数
+    model_dir: FunAudioLLM/Fun-ASR-Nano-2512
+    language: 中文
+    hotwords: null               # null = 禁用热词 (热词会降低准确率)
+    device: cuda:0               # GPU 加速 (无 GPU 时自动回退 cpu)
   sensevoice:
-    # ModelScope iic 模型, 与 CAM++ 同生态 (iic/speech_campplus_sv_zh-cn_16k-common)
-    # 非自回归端到端, 10秒音频70ms推理, 15x实时速度
-    # 支持语音识别 + 语种识别 + 情感识别 + 声学事件检测
     model_id: iic/SenseVoiceSmall
     vad_model: fsmn-vad
     language: zh
-    # 逆文本正则化: false=保留中文数字格式(二十五), true=转阿拉伯数字(25)
-    # 标签用中文数字 → 设 false 匹配标签格式, 降低 CER
     use_itn: false
   paraformer:
-    # FunASR AutoModel 自动下载
     model_name: paraformer-zh
     vad_model: fsmn-vad
     punc_model: ct-punc
-    hotwords: "空调,洗碗机,灯光,风量,制热,暂停,音量"  # 领域热词
+    hotwords: "空调,洗碗机,灯光,风量,制热,暂停,音量"
   whisper:
-    model_size: base           # tiny/base/small
+    model_size: base
     language: zh
   sherpa_onnx:
     encoder: null

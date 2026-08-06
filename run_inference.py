@@ -164,9 +164,14 @@ def main():
             os.path.dirname(output_path), "checkpoint.json"
         )
 
-        submission = pipeline.process_dataset(
-            args.data_root, args.split, checkpoint_path=ckpt_path
-        )
+        if pipeline.is_ensemble:
+            submission = pipeline.process_dataset_ensemble(
+                args.data_root, args.split, checkpoint_path=ckpt_path
+            )
+        else:
+            submission = pipeline.process_dataset(
+                args.data_root, args.split, checkpoint_path=ckpt_path
+            )
 
         # 打印汇总结果
         print("\n" + "=" * 60)

@@ -1,13 +1,13 @@
-# === 模型权重 (2.4GB+, 运行时从 ModelScope/HuggingFace 自动下载) ===
+# === 模型权重 (运行时从 ModelScope/HuggingFace/GitHub Releases 自动下载) ===
+# GTCRN 权重体积小且无公开下载源，随仓库提交
 pretrained/*
 !pretrained/gtcrn/
 
 # === 虚拟环境 ===
 .venv/
-
-# === 本地虚拟环境与安装包缓存 ===
-.venv/
 .venv.*/
+
+# === 安装包缓存 ===
 *.whl
 
 # === Python 缓存 ===
@@ -38,9 +38,6 @@ run_full_inference.bat
 
 # === 训练运行输出 (checkpoint/日志, 不上传) ===
 runs/
-
-# === 微调产物 (权重/日志, 不上传; 仓库保持全预训练状态) ===
-finetuned_models/
 
 # === IDE 配置 ===
 .idea/

@@ -14,25 +14,22 @@ audio:
 # Stage 1: 降噪模型
 # ===========================================================================
 denoise:
-  # 主选: GTCRN — 48K参数深度学习降噪, 复数域mask, 实时推理
-  # 备选: noisereduce   — 纯Python频谱门限, 适合快速验证
-  #       DeepFilterNet3 — 轻量实时, 需Rust编译
-  #       FullSubNet+    — 降噪质量更高但更重
-  model: gtcrn
+  # 主选: Renoise — 纯Python频谱门限降噪, 自包含实现, 无外部依赖
+  model: renoise
+  renoise:
+    stationary: true            # 静态噪声假设 (适合空调等持续噪声)
+    prop_decrease: 0.8          # 噪声抑制比例 (0-1, 越大抑制越多)
+  # 备选模型 (保留参考)
   gtcrn:
     checkpoint: dns3           # dns3 (通用噪声) 或 vctk (人声)
     n_fft: 512                 # STFT 帧长
     hop_length: 256            # STFT 帧移
-  noisereduce:
-    stationary: true            # 静态噪声假设 (适合空调等持续噪声)
-    prop_decrease: 0.8          # 噪声抑制比例 (0-1, 越大抑制越多)
   deepfilternet3:
-    # 预训练权重自动从 HuggingFace 下载
     model_dir: null           # null = 自动下载, 或指定本地路径
     atten_lim_db: 6           # 最大衰减 dB
   fullsubnet_plus:
     checkpoint: null           # 指定本地 checkpoint 路径
-  enable: true                 # 是否启用降噪阶段
+  enable: true
 
 # ===========================================================================
 # Stage 2: 人声分离 / 目标说话人提取

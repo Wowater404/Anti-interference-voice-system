@@ -2,7 +2,7 @@
 
 复杂交互场景下的抗干扰语音指令识别流水线，串联降噪、人声分离、声纹鉴别与语音识别四个阶段。
 
-## 流水线
+## 流水线（当前分支：3-model Z-score Ensemble + Fun-ASR-Nano）
 
 ```
 GTCRN (降噪) → SpEx+ (人声分离) → 3-model Z-score Ensemble (声纹鉴别) → Fun-ASR-Nano-2512 (语音识别)
@@ -20,7 +20,25 @@ GTCRN (降噪) → SpEx+ (人声分离) → 3-model Z-score Ensemble (声纹鉴�
 为阈值判定接受/拒识。Z-score 归一化消除了不同模型分数分布差异，使 ResNetSE 虽然
 单独表现较弱但能在融合中提供互补信息。
 
-## 最终实验结果
+## 纯推理仓库说明
+
+**当前仓库不含任何训练/微调脚本与产物**，定位为"纯推理流水线"：
+
+- 所有模块均为**官方预训练模型**，运行时自动加载或下载。
+- **不需要训练**：训练（微调）推迟到最终阶段，按团队约定（见 TEAM_INTEGRATION_GUIDE.md V2）在模型全部选定、架构锁定后由整合者统一进行；训练脚本与增强数据仅在本地保留，不入库。
+- 仓库内仅保留推理必需代码：`pipeline.py`、`run_inference.py`、`modules/`、`configs/`、`tools/download_*.py`（权重下载）。
+
+## 性能对比 (datasetA, 80分制 = CER×40 + RR×40)
+
+| 配置 | 阈值 | CER | RR | Score | 推理时间 |
+|------|------|-----|-----|-------|---------|
+| main 全预训练 (GTCRN + SpEx+ + 预训练CAM++ + Paraformer) | 0.25 | 0.6533 | 0.9198 | **50.66** | 632s |
+| V2 基线 (noisereduce + Paraformer + 预训练声纹) | 0.28 | 0.5833 | 0.9367 | 54.14 | 423s(CPU) |
+
+> 预训练声纹在 GTCRN 分布上区分力较弱（最优阈值 0.25，pos 接受率 55.5%）。
+> 微调声纹可提升约 10 分（实测 59.84~60.76），将在最后阶段实施。
+
+## 最终实验结果（当前分支，待复核）
 
 测试集：datasetA，共 1838 条（pos 1364 / neg 474）。
 
@@ -33,6 +51,7 @@ GTCRN (降噪) → SpEx+ (人声分离) → 3-model Z-score Ensemble (声纹鉴�
 
 评分公式：CER 得分 = (1 - CER) × 40，RR 得分 = RR × 40，识别得分 = CER 得分 + RR 得分。
 100 分制另含推理时间（10 分）和内存占用（10 分），此处为估算值。
+> ⚠️ 上述为分支自称实测，合入 main 前需在统一环境复核。
 
 ## 安装
 
@@ -122,6 +141,7 @@ utils/audio.py                    音频 I/O 工具
 utils/metrics.py                  CER / RR 评估指标
 tools/download_spexplus.py        SpEx+ 权重下载与 SHA256 校验
 tools/download_wespeaker.py       WeSpeaker ResNet34 ONNX 权重下载
+TEAM_INTEGRATION_GUIDE.md         团队合并规范 V2
 ```
 
 `pretrained/`（GTCRN 除外）、`results/`、虚拟环境和缓存均不进入 Git 提交。

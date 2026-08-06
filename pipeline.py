@@ -56,7 +56,10 @@ from utils.audio import load_wav, save_wav, normalize_audio, trim_silence
 from utils.metrics import evaluate, char_error_rate, strip_punctuation
 from modules.denoiser import create_denoiser, BaseDenoiser
 from modules.separator import create_separator, BaseSeparator
-from modules.voiceprint import create_voiceprint_extractor, BaseVoiceprintExtractor
+from modules.voiceprint import (
+    create_voiceprint_extractor, BaseVoiceprintExtractor,
+    EnsembleVoiceprintExtractor,
+)
 from modules.asr import create_asr, BaseASR
 
 
@@ -78,10 +81,13 @@ class VoicePipeline:
         # 初始化各模块 (延迟加载)
         self.denoiser: BaseDenoiser = create_denoiser(config.denoise, self.device)
         self.separator: BaseSeparator = create_separator(config.separation, self.device)
-        self.voiceprint_extractor: BaseVoiceprintExtractor = create_voiceprint_extractor(
+        self.voiceprint_extractor = create_voiceprint_extractor(
             config.voiceprint, self.device
         )
         self.asr: BaseASR = create_asr(config.asr, self.device)
+
+        # 是否为三模型 Z-score 集成模式
+        self.is_ensemble = isinstance(self.voiceprint_extractor, EnsembleVoiceprintExtractor)
 
         # 声纹鉴别阈值
         self.vp_threshold = config.voiceprint.get("threshold", 0.5)
@@ -116,11 +122,20 @@ class VoicePipeline:
         # 1. 声纹提取器 (最先加载, 其他模块可能依赖)
         print("\n[1/4] 加载声纹提取模型...")
         self.voiceprint_extractor.load()
-        if self.config.voiceprint.get("enable", True) and self.voiceprint_extractor.model is None:
-            raise RuntimeError(
-                f"声纹模型 {self.config.voiceprint.get('model')} 加载失败，"
-                "已停止流水线，防止使用零向量产生无效结果"
-            )
+        if self.config.voiceprint.get("enable", True):
+            if self.is_ensemble:
+                # 集成模式: 检查三个子模型
+                ens = self.voiceprint_extractor
+                if ens.cam.model is None or ens.eres.model is None or ens.rnet.model is None:
+                    raise RuntimeError(
+                        "三模型集成声纹加载失败 (CAM++/ERes2NetV2/ResNetSE),"
+                        "已停止流水线"
+                    )
+            elif self.voiceprint_extractor.model is None:
+                raise RuntimeError(
+                    f"声纹模型 {self.config.voiceprint.get('model')} 加载失败，"
+                    "已停止流水线，防止使用零向量产生无效结果"
+                )
 
         # 2. 降噪模型
         print("\n[2/4] 加载降噪模型...")
@@ -500,6 +515,182 @@ class VoicePipeline:
                         "cer": r["cer"],
                     }
                     for r in all_results
+                ],
+                "final_cer": metrics["final_cer"],
+                "duration": f"{total_duration:.2f}",
+            },
+            "metrics": {
+                "rejection_rate": metrics["rejection_rate"],
+                "final_score": metrics["final_score"],
+                "pos_count": metrics["pos_count"],
+                "neg_count": metrics["neg_count"],
+            },
+        }
+
+        return submission
+
+    def process_dataset_ensemble(self, data_root: str, split: str = "all",
+                                  checkpoint_path: str = None) -> Dict:
+        """
+        三模型 Z-score 集成批量处理 (CAM++ + ERes2NetV2 + ResNetSE)
+
+        流程:
+          Phase 1: 降噪 + 三模型声纹提取 + 原始相似度计算 (全部样本)
+          Phase 2: Z-score 归一化 + 加权融合 + 阈值判定
+          Phase 3: Fun-ASR-Nano ASR 识别 (仅接受样本)
+          Phase 4: 构建 JSONL 提交格式
+
+        Args:
+            data_root: 数据集根目录 (含 pos.jsonl, neg.jsonl)
+            split: "pos" / "neg" / "all"
+            checkpoint_path: 断点续传文件路径
+
+        Returns:
+            比赛提交格式 JSON
+        """
+        if not self._models_loaded:
+            self.load_models()
+
+        assert self.is_ensemble, "process_dataset_ensemble 需要 ensemble 模式"
+
+        total_start = time.time()
+        ens = self.voiceprint_extractor
+        sr = self.config.sample_rate
+
+        # === 加载样本 ===
+        splits = []
+        if split in ("pos", "all"):
+            splits.append("pos")
+        if split in ("neg", "all"):
+            splits.append("neg")
+
+        all_samples = []
+        for sp in splits:
+            jsonl_path = os.path.join(data_root, f"{sp}.jsonl")
+            if not os.path.exists(jsonl_path):
+                continue
+            with open(jsonl_path, "r", encoding="utf-8") as f:
+                for i, line in enumerate(f):
+                    if line.strip():
+                        rec = json.loads(line)
+                        rec["_split"] = sp
+                        rec["_idx"] = i
+                        all_samples.append(rec)
+
+        print(f"\n[Ensemble] 共 {len(all_samples)} 条样本")
+
+        # === Phase 1: 降噪 + 声纹提取 + 原始相似度 ===
+        print("\n[Phase 1] 降噪 + 三模型声纹提取...")
+        raw_sims = []  # [(cam_sim, eres_sim, rnet_sim), ...]
+        denoised_audios = []  # 保存降噪后音频供 ASR 使用
+        sample_ids = []
+        labels = []
+
+        for i, sample in enumerate(all_samples):
+            kws_path = os.path.join(data_root, sample["唤醒音频"])
+            cmd_path = os.path.join(data_root, sample["识别音频"])
+            label = sample.get("识别文本", None)
+
+            kws_audio, _ = load_wav(kws_path, sr)
+            cmd_audio, _ = load_wav(cmd_path, sr)
+
+            # 降噪
+            denoised = self.denoiser.denoise(cmd_audio, sr)
+
+            # 三模型声纹提取
+            kws_cam, kws_eres, kws_rnet = ens.extract_all(kws_audio, sr)
+            den_cam, den_eres, den_rnet = ens.extract_all(denoised, sr)
+
+            # 三模型 cosine 相似度
+            cam_sim = ens.cosine_sim(kws_cam, den_cam)
+            eres_sim = ens.cosine_sim(kws_eres, den_eres)
+            rnet_sim = ens.cosine_sim(kws_rnet, den_rnet)
+
+            raw_sims.append((cam_sim, eres_sim, rnet_sim))
+            denoised_audios.append(denoised)
+            sample_ids.append(str(sample.get("id", i)))
+            labels.append(label)
+
+            if (i + 1) % 50 == 0 or i == len(all_samples) - 1:
+                elapsed = time.time() - total_start
+                print(f"  [{i+1}/{len(all_samples)}] ({(i+1)/len(all_samples)*100:.1f}%) "
+                      f"已用 {elapsed:.1f}s", flush=True)
+
+        # === Phase 2: Z-score 归一化 + 融合 + 阈值判定 ===
+        print("\n[Phase 2] Z-score 归一化 + 融合...")
+        fused_sims = EnsembleVoiceprintExtractor.zscore_fuse(raw_sims, ens.weights)
+        accept_flags = fused_sims >= ens.threshold
+
+        n_accept = int(accept_flags.sum())
+        print(f"  阈值: {ens.threshold} (Z-score)")
+        print(f"  接受: {n_accept}, 拒识: {len(accept_flags) - n_accept}")
+
+        # === Phase 3: ASR 识别 (仅接受样本) ===
+        print("\n[Phase 3] Fun-ASR-Nano ASR 识别...")
+        results = []
+        asr_count = 0
+
+        for i, sample in enumerate(all_samples):
+            is_accepted = bool(accept_flags[i])
+            label = labels[i]
+            sample_id = sample_ids[i]
+
+            if is_accepted:
+                asr_audio = normalize_audio(denoised_audios[i])
+                asr_audio = trim_silence(asr_audio, threshold=0.005)
+                text = self.asr.transcribe(asr_audio, sr)
+                text = strip_punctuation(text)
+                asr_count += 1
+            else:
+                text = ""
+
+            # CER 计算
+            cer = None
+            if label is not None:
+                if label and text:
+                    cer = char_error_rate(label, text)
+                elif not label and not text:
+                    cer = 0.0
+                elif (label and not text) or (not label and text):
+                    cer = 1.0
+
+            results.append({
+                "id": sample_id,
+                "content": text,
+                "label": label if label is not None else "",
+                "cer": f"{cer:.4f}" if cer is not None else "",
+                "fused_sim": f"{fused_sims[i]:.4f}",
+                "is_target": is_accepted,
+            })
+
+            if (asr_count % 10 == 0 and asr_count > 0) or i == len(all_samples) - 1:
+                elapsed = time.time() - total_start
+                print(f"  [{i+1}/{len(all_samples)}] ASR已跑 {asr_count} 条, "
+                      f"已用 {elapsed:.1f}s", flush=True)
+
+        # === Phase 4: 构建提交 JSON ===
+        total_duration = time.time() - total_start
+
+        pos_results = [r for r in results if r["label"]]
+        neg_results = [r for r in results if not r["label"] or r["label"] == "null"]
+
+        try:
+            metrics = evaluate(pos_results, neg_results)
+        except Exception as e:
+            print(f"警告: 评估指标计算失败 ({e})")
+            metrics = {
+                "final_cer": "0.0000",
+                "rejection_rate": "0.0000",
+                "final_score": "0.0000",
+                "pos_count": len(pos_results),
+                "neg_count": len(neg_results),
+            }
+
+        submission = {
+            "result": {
+                "results": [
+                    {"id": r["id"], "content": r["content"], "label": r["label"], "cer": r["cer"]}
+                    for r in results
                 ],
                 "final_cer": metrics["final_cer"],
                 "duration": f"{total_duration:.2f}",

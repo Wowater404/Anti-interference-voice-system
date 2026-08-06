@@ -39,6 +39,9 @@ run_full_inference.bat
 # === 训练运行输出 (checkpoint/日志, 不上传) ===
 runs/
 
+# === 微调产物 (权重/日志, 不上传; 仓库保持纯推理状态) ===
+finetuned_models/
+
 # === IDE 配置 ===
 .idea/
 .vscode/

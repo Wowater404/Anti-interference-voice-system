@@ -180,18 +180,24 @@ class NoiseReduceDenoiser(BaseDenoiser):
     参数:
         stationary:    True=静态噪声假设 (适合空调等持续噪声)
         prop_decrease: 噪声抑制比例 (0-1, 越大抑制越多, 推荐 0.8)
+        n_std_thresh:  阈值标准差倍数 (越高越保守, 推荐 1.0~2.0)
+        n_fft:         FFT 点数 (影响频率分辨率, 默认1024)
     """
 
     def __init__(self, device: str = "cpu", stationary: bool = True,
-                 prop_decrease: float = 0.8):
+                 prop_decrease: float = 0.8, n_std_thresh: float = 1.5,
+                 n_fft: int = 1024):
         super().__init__(device)
         self.stationary = stationary
         self.prop_decrease = prop_decrease
+        self.n_std_thresh = n_std_thresh
+        self.n_fft = n_fft
 
     def load(self):
         self._loaded = True
         print(f"[NoiseReduce] 频谱门限降噪就绪 "
-              f"(stationary={self.stationary}, prop_decrease={self.prop_decrease})")
+              f"(stationary={self.stationary}, prop_decrease={self.prop_decrease}, "
+              f"n_std_thresh={self.n_std_thresh}, n_fft={self.n_fft})")
 
     def denoise(self, audio: np.ndarray, sr: int = 16000) -> np.ndarray:
         if not self._loaded:
@@ -202,6 +208,8 @@ class NoiseReduceDenoiser(BaseDenoiser):
             sr=sr,
             stationary=self.stationary,
             prop_decrease=self.prop_decrease,
+            n_std_thresh=self.n_std_thresh,
+            n_fft=self.n_fft,
         )
         return enhanced.astype(np.float32)
 

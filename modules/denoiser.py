@@ -402,6 +402,17 @@ def create_denoiser(config: dict, device: str = "cpu") -> BaseDenoiser:
             stationary=cfg.get("stationary", True),
             prop_decrease=cfg.get("prop_decrease", 0.8),
         )
+    elif model_name == "renoise":
+        # Renoise: 自包含频谱门限降噪 (降噪组, 无外部依赖)
+        from modules.renoise import NoiseReduceDenoiser as RenoiseDenoiser
+        cfg = config.get("renoise", {})
+        return RenoiseDenoiser(
+            device=device,
+            stationary=cfg.get("stationary", True),
+            prop_decrease=cfg.get("prop_decrease", 0.8),
+            n_std_thresh=cfg.get("n_std_thresh", 1.5),
+            n_fft=cfg.get("n_fft", 1024),
+        )
     elif model_name == "deepfilternet3":
         cfg = config.get("deepfilternet3", {})
         return DeepFilterNet3Denoiser(

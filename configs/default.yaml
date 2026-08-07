@@ -17,8 +17,10 @@ denoise:
   # 主选: Renoise — 纯Python频谱门限降噪, 自包含实现, 无外部依赖
   model: renoise
   renoise:
-    stationary: true            # 静态噪声假设 (适合空调等持续噪声)
+    stationary: false           # 自适应噪声估计 (抽样扫描最优)
     prop_decrease: 0.8          # 噪声抑制比例 (0-1, 越大抑制越多)
+    n_std_thresh: 1.5           # 阈值标准差倍数 (越高越保守)
+    n_fft: 1024                 # FFT 点数
   # 备选模型 (保留参考)
   gtcrn:
     checkpoint: dns3           # dns3 (通用噪声) 或 vctk (人声)

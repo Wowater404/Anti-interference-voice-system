@@ -195,6 +195,38 @@ def main():
             json.dump(official_submission, f, ensure_ascii=False, indent=2)
         print(f"记事本文件已保存至: {text_output_path}")
 
+        # 峰值内存统计 (官方评分: 内存10%)
+        try:
+            import ctypes
+            class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+                _fields_ = [("cb", ctypes.c_ulong), ("PageFaultCount", ctypes.c_ulong),
+                            ("PeakWorkingSetSize", ctypes.c_size_t),
+                            ("WorkingSetSize", ctypes.c_size_t),
+                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                            ("PagefileUsage", ctypes.c_size_t),
+                            ("PeakPagefileUsage", ctypes.c_size_t)]
+            pmc = PROCESS_MEMORY_COUNTERS()
+            # 需要真实句柄 (GetCurrentProcess返回伪句柄-1, psapi不接受)
+            h = ctypes.windll.kernel32.OpenProcess(0x0400, False,  # PROCESS_QUERY_INFORMATION
+                                                   ctypes.windll.kernel32.GetCurrentProcessId())
+            ret = ctypes.windll.psapi.GetProcessMemoryInfo(
+                h, ctypes.byref(pmc), ctypes.sizeof(pmc))
+            ctypes.windll.kernel32.CloseHandle(h)
+            if ret:
+                peak_gb = pmc.PeakWorkingSetSize / 1024**3
+                curr_gb = pmc.WorkingSetSize / 1024**3
+                print(f"  峰值内存: {peak_gb:.2f} GB | 当前内存: {curr_gb:.2f} GB")
+                submission['result']['peak_memory_gb'] = round(peak_gb, 3)
+                submission['result']['memory_gb'] = round(curr_gb, 3)
+                with open(output_path, "w", encoding="utf-8") as f:
+                    json.dump({"result": submission["result"]}, f, ensure_ascii=False, indent=2)
+                print(f"  内存信息已写入: {output_path}")
+        except Exception as e:
+            print(f"  内存统计失败: {e}")
+
     else:
         parser.print_help()
         print("\n错误: 请指定 --data_root 或 --kws + --cmd")

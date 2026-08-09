@@ -102,20 +102,26 @@ class DeepFilterNet3Denoiser(BaseDenoiser):
         else:
             audio_df = audio
 
-        # 推理
+        # 推理 (enhance 需要 [C, T] 二维输入, C=声道数)
+        # 注意: df 库前端 df.analysis() 只收 numpy/CPU 张量, 必须用 CPU 输入;
+        #       模型设备由 df 内部 get_device() 自动决定 (有CUDA自动用GPU)
+        audio_t = torch.from_numpy(audio_df).float().cpu()
+        if audio_t.dim() == 1:
+            audio_t = audio_t.unsqueeze(0)  # [T] -> [1, T]
         enhanced = self._enhance_fn(
             self.model,
             self.df_state,
-            torch.from_numpy(audio_df).to(self.device)
+            audio_t,
+            atten_lim_db=self.atten_lim_db,
         )
-        enhanced = enhanced.cpu().numpy()
+        enhanced = enhanced.cpu().numpy().squeeze()  # [1, T] -> [T]
 
         # 重采样回原始采样率
         if df_sr != sr:
             from utils.audio import resample
             enhanced = resample(enhanced, df_sr, sr)
 
-        return enhanced
+        return enhanced.astype(np.float32)
 
 
 class FullSubNetPlusDenoiser(BaseDenoiser):

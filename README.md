@@ -2,7 +2,32 @@
 
 复杂交互场景下的抗干扰语音指令识别流水线，串联降噪、人声分离、声纹鉴别与语音识别四个阶段。
 
-## 流水线（当前分支：3-model Z-score Ensemble + Fun-ASR-Nano）
+## ⚡ V8 最终方案 (2026-08-09, release/v8-dual-full 分支)
+
+```
+Renoise (降噪) → SpEx+ (自适应分离) → 双微调融合声纹 (CAM++v7+ERes2NetV2v7+ResNetSE) → Paraformer (ASR)
+```
+
+**datasetA 全量成绩: CER 0.3793 | RR 0.9958 | 80分 64.66 | 推理 1427s | 峰值内存 7.14GB**
+
+- 微调模型权重经 **Git LFS** 管理 (`finetuned_models/`)，clone 后执行 `git lfs pull`
+- 详细使用指南见 **`使用说明.md`**（环境搭建/推理命令/常见问题/训练脚本）
+- datasetA 提交文件见 **`results/submission_datasetA_dual.json`**（官方 CER 口径）
+
+### 快速开始
+
+```bash
+git clone https://github.com/Wowater404/Anti-interference-voice-system.git
+cd voice_pipeline && git lfs pull
+# 单条推理
+python run_inference.py --kws 唤醒.wav --cmd 识别.wav
+# 批量 (比赛格式)
+python run_inference.py --config configs/verify_dual_full.yaml --data_root <dataset目录> --split all --output results/out.json
+```
+
+---
+
+## 历史流水线（早期版本）
 
 ```
 GTCRN (降噪) → SpEx+ (人声分离) → 3-model Z-score Ensemble (声纹鉴别) → Fun-ASR-Nano-2512 (语音识别)

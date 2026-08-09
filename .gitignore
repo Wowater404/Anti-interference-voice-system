@@ -20,8 +20,10 @@ __pycache__/
 .Python
 *.egg-info/
 
-# === 推理结果与日志 (运行产物, 不上传) ===
-results/
+# === 推理结果与日志 (运行产物, 不上传; 提交文件例外) ===
+results/*
+!results/submission_datasetA_dual.json
+!results/submission_datasetA_dual_full.json
 *.log
 experiment_logs/
 
@@ -42,7 +44,6 @@ run_full_inference.bat
 runs/
 
 # === 微调产物 (权重/日志, 不上传; 仓库保持纯推理状态) ===
-finetuned_models/
 
 # === IDE 配置 ===
 .idea/

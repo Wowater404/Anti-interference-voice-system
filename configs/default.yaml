@@ -14,21 +14,21 @@ audio:
 # Stage 1: 降噪模型
 # ===========================================================================
 denoise:
-  # 主选: Renoise — 纯Python频谱门限降噪, 自包含实现, 无外部依赖
+  # 主选: Renoise — 纯Python频谱门限降噪 (调参后: stationary=False 自适应)
   model: renoise
   renoise:
-    stationary: false           # 自适应噪声估计 (抽样扫描最优)
+    stationary: false           # 自适应噪声估计 (调参最优)
     prop_decrease: 0.8          # 噪声抑制比例 (0-1, 越大抑制越多)
     n_std_thresh: 1.5           # 阈值标准差倍数 (越高越保守)
     n_fft: 1024                 # FFT 点数
   # 备选模型 (保留参考)
+  deepfilternet3:
+    model_dir: null           # null = 用官方预训练权重
+    atten_lim_db: 6           # 最大衰减 dB
   gtcrn:
     checkpoint: dns3           # dns3 (通用噪声) 或 vctk (人声)
     n_fft: 512                 # STFT 帧长
     hop_length: 256            # STFT 帧移
-  deepfilternet3:
-    model_dir: null           # null = 自动下载, 或指定本地路径
-    atten_lim_db: 6           # 最大衰减 dB
   fullsubnet_plus:
     checkpoint: null           # 指定本地 checkpoint 路径
   enable: true

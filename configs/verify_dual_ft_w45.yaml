@@ -1,0 +1,92 @@
+audio:
+  sample_rate: 16000
+  mono: true
+  sample_width: 2
+  format: wav
+denoise:
+  model: renoise
+  enable: true
+  renoise:
+    stationary: false
+    prop_decrease: 0.8
+    n_std_thresh: 1.5
+    n_fft: 1024
+separation:
+  model: spex_plus
+  sepformer16k:
+    huggingface_repo: speechbrain/sepformer-whamr16k
+  sepformer:
+    huggingface_repo: speechbrain/sepformer-libri2mix
+    sample_rate: 8000
+  spex_plus:
+    checkpoint: pretrained/spex_plus/checkpoint.pth
+    sample_rate: 16000
+    num_spks: 90
+    expected_sha256: 2d6a2f2b404fd18a809eb82052fd64ef0bd986f410b1043bc666b54121e44b5c
+    allow_fallback: false
+  enable: true
+  max_speakers: 2
+  vp_threshold_separated: 0.2805
+  sep_trigger_min: 0.0
+  sim_jump_cap: 0.0625
+  voiceprint_use_separated: false
+  asr_use_separated: true
+voiceprint:
+  model: ensemble
+  ensemble:
+    weights:
+    - 0.45
+    - 0.45
+    - 0.1
+    threshold: -0.17
+  ecapa_tdnn:
+    huggingface_repo: speechbrain/spkrec-ecapa-voxceleb
+    embedding_dim: 192
+  cam_plus:
+    model_id: iic/speech_campplus_sv_zh-cn_16k-common
+    embedding_dim: 192
+    finetuned_path: runs/camplus_v7_fold0/camplus_finetuned_best.pt
+  eres2netv2:
+    model_id: iic/speech_eres2netv2_sv_zh-cn_16k-common
+    embedding_dim: 192
+    finetuned_path: finetuned_models/eres2netv2_v7_fold0.pt
+  resnetse:
+    model_path: pretrained/wespeaker_resnet34/wespeaker_zh_cnceleb_resnet34.onnx
+    num_threads: 4
+    embedding_dim: 256
+  threshold: 0.28
+  enable: true
+asr:
+  model: fun_asr_nano
+  fun_asr_nano:
+    model_dir: FunAudioLLM/Fun-ASR-Nano-2512
+    language: 中文
+    hotwords: null
+    device: cuda:0
+  sensevoice:
+    model_id: iic/SenseVoiceSmall
+    vad_model: fsmn-vad
+    language: zh
+    use_itn: false
+  paraformer:
+    model_name: paraformer-zh
+    vad_model: fsmn-vad
+    punc_model: ct-punc
+    hotwords: 空调,洗碗机,灯光,风量,制热,暂停,音量
+  whisper:
+    model_size: base
+    language: zh
+  sherpa_onnx:
+    encoder: null
+    decoder: null
+  enable: true
+dataset:
+  pos_jsonl: pos.jsonl
+  neg_jsonl: neg.jsonl
+  pos_dir: pos
+  neg_dir: neg
+output:
+  result_dir: results/spex_plus
+  save_intermediate: false
+  intermediate_dir: results/spex_plus/intermediate
+device: auto

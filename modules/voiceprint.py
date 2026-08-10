@@ -471,6 +471,28 @@ class EnsembleVoiceprintExtractor:
             self.rnet.extract(audio, sr),
         )
 
+    def extract(self, audio: np.ndarray, sr: int = 16000) -> np.ndarray:
+        """
+        兼容接口: 返回加权拼接的融合 embedding (供单条推理 process_sample 使用)
+
+        三个模型 embedding 各自 L2 归一化后按权重加权拼接,
+        cosine 相似度在拼接空间计算, 等价于加权融合效果。
+        注意: 单条路径的阈值是绝对相似度 (非 z-score), 与批量路径阈值口径不同。
+        """
+        cam_emb, eres_emb, rnet_emb = self.extract_all(audio, sr)
+        w = self.weights
+
+        def _l2(x):
+            n = float(np.linalg.norm(x))
+            return x / n if n > 1e-8 else x
+
+        fused = np.concatenate([
+            _l2(cam_emb) * w[0],
+            _l2(eres_emb) * w[1],
+            _l2(rnet_emb) * w[2],
+        ]).astype(np.float32)
+        return fused
+
     @staticmethod
     def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
         """计算 cosine 相似度"""

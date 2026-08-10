@@ -55,7 +55,7 @@ from config import PipelineConfig
 from utils.audio import load_wav, save_wav, normalize_audio, trim_silence
 from utils.metrics import evaluate, char_error_rate, strip_punctuation
 from modules.denoiser import create_denoiser, BaseDenoiser
-from modules.separator import create_separator, BaseSeparator
+from modules.separator import create_separator, BaseSeparator, PassThroughSeparator
 from modules.voiceprint import (
     create_voiceprint_extractor, BaseVoiceprintExtractor,
     EnsembleVoiceprintExtractor,
@@ -76,7 +76,11 @@ class VoicePipeline:
     def __init__(self, config: PipelineConfig):
         self.config = config
         self.device = config.device
-        self.separator_model_name = config.separation.get("model", "passthrough")
+        # enable=false 时统一降级为 passthrough (日志/检查口径一致)
+        if config.separation.get("enable", True):
+            self.separator_model_name = config.separation.get("model", "passthrough")
+        else:
+            self.separator_model_name = "passthrough"
 
         # 初始化各模块 (延迟加载)
         self.denoiser: BaseDenoiser = create_denoiser(config.denoise, self.device)
@@ -148,6 +152,7 @@ class VoicePipeline:
         if (
             self.separation_enabled
             and self.separator_model_name not in ("passthrough", "none")
+            and not isinstance(self.separator, PassThroughSeparator)
             and self.separator.model is None
         ):
             raise RuntimeError(
@@ -597,9 +602,39 @@ class VoicePipeline:
             # 降噪
             denoised = self.denoiser.denoise(cmd_audio, sr)
 
-            # 三模型声纹提取
+            # 三模型声纹提取 (kws + 降噪后cmd)
             kws_cam, kws_eres, kws_rnet = ens.extract_all(kws_audio, sr)
             den_cam, den_eres, den_rnet = ens.extract_all(denoised, sr)
+
+            # 加权相似度 (绝对空间, 用于自适应分离判断)
+            _w = ens.weights
+            _sim_abs = (_w[0] * ens.cosine_sim(kws_cam, den_cam)
+                        + _w[1] * ens.cosine_sim(kws_eres, den_eres)
+                        + _w[2] * ens.cosine_sim(kws_rnet, den_rnet))
+
+            # 自适应分离: 仅低置信样本 (sim ∈ [sep_trigger_min, vp_threshold))
+            # 对齐训练数据 (datasetA_aug_processed 只对低置信样本分离)
+            if (self.separation_enabled and self.separator is not None
+                    and self.sep_trigger_min <= _sim_abs < self.vp_threshold):
+                _sep_result = {"audio": None, "ok": False}
+                def _do_sep():
+                    try:
+                        self.separator.set_reference_audio(kws_audio, sr)
+                        _sep_result["audio"], _ = self.separator.separate(denoised, sr)
+                        _sep_result["ok"] = True
+                    except Exception as _e:
+                        print(f"  [分离异常] id={sample.get('id')}: {_e}", flush=True)
+                        _sep_result["audio"] = None
+                import threading
+                _t = threading.Thread(target=_do_sep, daemon=True)
+                _t.start()
+                _t.join(timeout=60)  # 60s 超时, 防单样本卡死拖死全量
+                if _t.is_alive():
+                    print(f"  [分离超时] id={sample.get('id')}, 跳过分离(用降噪音频)", flush=True)
+                elif _sep_result["ok"] and _sep_result["audio"] is not None and len(_sep_result["audio"]) > 0:
+                    # 分离成功后用分离音频重新提声纹 (对齐训练: 分离后声纹选轨)
+                    denoised = _sep_result["audio"]
+                    den_cam, den_eres, den_rnet = ens.extract_all(denoised, sr)
 
             # 三模型 cosine 相似度
             cam_sim = ens.cosine_sim(kws_cam, den_cam)

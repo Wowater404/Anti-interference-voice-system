@@ -104,7 +104,35 @@ def main():
     if args.sim_jump_cap is not None:
         config._cfg.setdefault("separation", {})["sim_jump_cap"] = args.sim_jump_cap
 
-    print(f"当前分离模型: {config.separation.get('model', 'passthrough')}")
+    _sep_model = config.separation.get("model", "passthrough")
+    if not config.separation.get("enable", True):
+        _sep_model = "passthrough"
+    print(f"当前分离模型: {_sep_model}")
+
+    # ============================================================
+    # GPU 空闲检查 (治本: 防止显存竞争导致 CUDA 静默卡死)
+    # 背景: 2026-08-10 曾因另一任务占用 GPU 时启动推理 → 显存竞争 → 卡死
+    # ============================================================
+    import torch as _torch
+    if _torch.cuda.is_available():
+        try:
+            _free, _total = _torch.cuda.mem_get_info()
+            _used_mb = (_total - _free) / 1024**2
+            _total_mb = _total / 1024**2
+            if _used_mb > _total_mb * 0.5:
+                print(f"\n⚠️ 警告: GPU 显存已被占用 {_used_mb:.0f}/{_total_mb:.0f} MB (>50%)")
+                print("  可能是其他任务正在使用 GPU, 显存竞争可能导致推理卡死!")
+                print("  建议: 先检查并结束其他 GPU 任务 (nvidia-smi) 再继续")
+                print("  继续运行: 按 Enter; 终止: Ctrl+C")
+                try:
+                    input()
+                except KeyboardInterrupt:
+                    print("\n已终止 (请先释放 GPU 再运行)")
+                    return
+            else:
+                print(f"GPU 显存: {_used_mb:.0f}/{_total_mb:.0f} MB 空闲, 状态正常 ✅")
+        except Exception as _e:
+            print(f"GPU 显存检查失败 (跳过): {_e}")
 
     # 创建流水线
     pipeline = VoicePipeline(config)

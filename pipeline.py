@@ -54,6 +54,7 @@ from pathlib import Path
 from config import PipelineConfig
 from utils.audio import load_wav, save_wav, normalize_audio, trim_silence
 from utils.metrics import evaluate, char_error_rate, strip_punctuation
+from utils.digit_normalize import normalize_digits
 from modules.denoiser import create_denoiser, BaseDenoiser
 from modules.separator import create_separator, BaseSeparator, PassThroughSeparator
 from modules.voiceprint import (
@@ -338,6 +339,8 @@ class VoicePipeline:
             text = self.asr.transcribe(asr_audio, sr)
             # 去除标点符号 (ASR punc 模型会添加标点, 但标签不含标点)
             text = strip_punctuation(text)
+            # 数字归一化: 阿拉伯数字 → 中文数字 (对齐官方 label 写法, 26度→二十六度)
+            text = normalize_digits(text)
             stages_time["asr"] = time.time() - t0
 
             content = text if text else ""
@@ -675,6 +678,8 @@ class VoicePipeline:
                 asr_audio = trim_silence(asr_audio, threshold=0.005)
                 text = self.asr.transcribe(asr_audio, sr)
                 text = strip_punctuation(text)
+                # 数字归一化: 阿拉伯数字 → 中文数字 (对齐官方 label 写法)
+                text = normalize_digits(text)
                 asr_count += 1
             else:
                 text = ""

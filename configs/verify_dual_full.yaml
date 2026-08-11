@@ -61,7 +61,7 @@ asr:
   fun_asr_nano:
     model_dir: FunAudioLLM/Fun-ASR-Nano-2512
     language: 中文
-    hotwords: null
+    hotwords: 你好COLMO 轻干洗 烹饪 净呼吸 开机 备餐 歌 音箱 全部 风速 干衣
     device: cuda:0
   sensevoice:
     model_id: iic/SenseVoiceSmall

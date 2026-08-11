@@ -25,6 +25,12 @@ import json
 import argparse
 from pathlib import Path
 
+# 提前加载 torch 并禁用 cuDNN, 避免后续模块链中 torch._C 加载 cuDNN 全局依赖崩溃
+# (Windows 环境 cuDNN DLL 问题: torch/__init__.py:409 from torch._C import * 偶发 access violation)
+import torch
+torch.backends.cudnn.enabled = False
+torch.set_num_threads(max(1, os.cpu_count() or 1))
+
 # 添加项目根目录到 path
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)

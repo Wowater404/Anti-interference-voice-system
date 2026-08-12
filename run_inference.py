@@ -25,10 +25,10 @@ import json
 import argparse
 from pathlib import Path
 
-# 提前加载 torch 并禁用 cuDNN, 避免后续模块链中 torch._C 加载 cuDNN 全局依赖崩溃
-# (Windows 环境 cuDNN DLL 问题: torch/__init__.py:409 from torch._C import * 偶发 access violation)
+# 提前加载 torch (确保 PATH 含 conda Library/bin, cuDNN 才能被 torch 找到)
+# 注意: 不再禁用 cuDNN! 2026-08-12 验证 cuDNN 正常 (version 92301)
+#       之前段错误是环境故障(重启解决), 禁用 cuDNN 会慢 3-5 倍
 import torch
-torch.backends.cudnn.enabled = False
 torch.set_num_threads(max(1, os.cpu_count() or 1))
 
 # 添加项目根目录到 path

@@ -22,11 +22,14 @@ _CN_UNITS = ["", "十", "百", "千", "万", "亿"]
 
 
 def _num_to_cn(n: int) -> str:
-    """整数 → 中文数字 (支持 0~9999万)"""
+    """整数 → 中文数字 (支持 0~99999999, 超过返回空串由调用方保留原文)"""
     if n == 0:
         return "零"
     if n < 0:
         return "负" + _num_to_cn(-n)
+    # 安全保护: 超过 8 位 (1亿) 超出本函数支持范围, 返回 None 表示不转换
+    if n >= 100000000:
+        return None
 
     def _under_10000(x: int) -> str:
         if x == 0:
@@ -72,14 +75,18 @@ def _num_to_cn(n: int) -> str:
 
 
 def _num_to_cn_decimal(num_str: str) -> str:
-    """小数 '3.5' → '三点五'"""
+    """小数 '3.5' → '三点五' (超大数字保留原文)"""
     if "." in num_str:
         int_part, frac_part = num_str.split(".", 1)
-        result = _num_to_cn(int(int_part)) if int_part else "零"
+        cn = _num_to_cn(int(int_part)) if int_part else "零"
+        if cn is None:
+            return num_str  # 超大整数部分不转换
+        result = cn
         if frac_part:
             result += "点" + "".join(_CN_DIGITS[int(d)] for d in frac_part if d.isdigit())
         return result
-    return _num_to_cn(int(num_str))
+    cn = _num_to_cn(int(num_str))
+    return cn if cn is not None else num_str
 
 
 def _should_skip(context: str, match_start: int, match_end: int) -> bool:
@@ -87,11 +94,17 @@ def _should_skip(context: str, match_start: int, match_end: int) -> bool:
     before = context[:match_start]
     after = context[match_end:]
 
-    # 前面紧跟字母 (如 W25, V2) → 是型号/编号, 跳过
-    if before and before[-1].isalpha():
+    # 前面紧跟【英文字母】 (如 W25, V2) → 是型号/编号, 跳过
+    # 注意: 用 ASCII 判断, 中文汉字不触发 (否则 '风量调到30' 会被误判为型号)
+    if before and ('A' <= before[-1] <= 'Z' or 'a' <= before[-1] <= 'z'):
         return True
-    # 后面紧跟字母 (如 4G 的 G 后面...) → 4G 场景: 数字前无字母则不跳, 但要特殊处理
     return False
+
+
+def _cn_or_orig(n: int, orig: str) -> str:
+    """_num_to_cn 的安全封装: 超大数字返回原文"""
+    cn = _num_to_cn(n)
+    return cn if cn is not None else orig
 
 
 def normalize_digits(text: str) -> str:
@@ -108,21 +121,21 @@ def normalize_digits(text: str) -> str:
         return text
 
     # 1. 百分比: 30% / 百分之30 → 百分之三十
-    text = re.sub(r"百分之(\d+)", lambda m: "百分之" + _num_to_cn(int(m.group(1))), text)
-    text = re.sub(r"(\d+)%", lambda m: "百分之" + _num_to_cn(int(m.group(1))), text)
+    text = re.sub(r"百分之(\d+)", lambda m: "百分之" + _cn_or_orig(int(m.group(1)), m.group(0)), text)
+    text = re.sub(r"(\d+)%", lambda m: "百分之" + _cn_or_orig(int(m.group(1)), m.group(0)), text)
 
     # 2. 小数: 3.5 → 三点五
     text = re.sub(r"(\d+\.\d+)", lambda m: _num_to_cn_decimal(m.group(1)), text)
 
     # 3. 整数: 26 → 二十六 (跳过型号场景: 数字前紧跟字母如 W25)
     #    数字后跟单位/字母也转换: 26度→二十六度, 9点→九点, 4G→四G
-    text = re.sub(r"(\d+)([度%倍个只台盏件套双点G])", lambda m: _num_to_cn(int(m.group(1))) + m.group(2), text)
+    text = re.sub(r"(\d+)([度%倍个只台盏件套双点G])", lambda m: _cn_or_orig(int(m.group(1)), m.group(1)) + m.group(2), text)
 
     # 4. 剩余纯数字 (前面不是字母才转, 避免 W25 这类型号)
     def _int_repl(m: re.Match) -> str:
         if _should_skip(m.string, m.start(), m.end()):
             return m.group(0)
-        return _num_to_cn(int(m.group(1)))
+        return _cn_or_orig(int(m.group(1)), m.group(1))
 
     text = re.sub(r"(\d+)", _int_repl, text)
 

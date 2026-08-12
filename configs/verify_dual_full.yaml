@@ -8,8 +8,8 @@ denoise:
   enable: true
   renoise:
     stationary: false
-    prop_decrease: 0.8
-    n_std_thresh: 1.5
+    prop_decrease: 0.9
+    n_std_thresh: 1.0
     n_fft: 1024
 separation:
   model: spex_plus

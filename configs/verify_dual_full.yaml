@@ -8,8 +8,8 @@ denoise:
   enable: true
   renoise:
     stationary: false
-    prop_decrease: 0.8
-    n_std_thresh: 1.5
+    prop_decrease: 0.9
+    n_std_thresh: 1.0
     n_fft: 1024
 separation:
   model: spex_plus
@@ -28,7 +28,7 @@ separation:
   max_speakers: 2
   vp_threshold_separated: 0.2805
   sep_trigger_min: 0.0
-  sim_jump_cap: 0.0625
+  sim_jump_cap: 0.3
   voiceprint_use_separated: false
   asr_use_separated: true
 voiceprint:
@@ -54,7 +54,7 @@ voiceprint:
     model_path: pretrained/wespeaker_resnet34/wespeaker_zh_cnceleb_resnet34.onnx
     num_threads: 4
     embedding_dim: 256
-  threshold: 0.28
+  threshold: 0.68
   enable: true
 asr:
   model: fun_asr_nano

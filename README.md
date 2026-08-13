@@ -10,7 +10,7 @@ Renoise (降噪) → SpEx+ (自适应分离) → 双微调融合声纹 (CAM++v7+
 
 **datasetA 全量成绩: CER 0.3705 | RR 0.9937 | 80分 64.93 | 推理 1566s (GPU)**
 
-- 微调模型权重经 **Git LFS** 管理 (`finetuned_models/`)，clone 后执行 `git lfs pull`
+- 微调模型权重经 **HuggingFace / GitHub Releases** 托管，clone 后执行 `python tools/download_finetuned.py`（无需 git-lfs）
 - 详细使用指南见 **`使用说明.md`**（环境搭建/推理命令/常见问题/训练脚本）
 - datasetA 提交文件见 **`results/submission_datasetA_dual.json`**（官方 CER 口径）
 - **数字归一化**: ASR 输出后处理（26→二十六、30%→百分之三十），已接入 `pipeline.py`（`utils/digit_normalize.py`）
@@ -20,7 +20,7 @@ Renoise (降噪) → SpEx+ (自适应分离) → 双微调融合声纹 (CAM++v7+
 
 ```bash
 git clone https://github.com/Wowater404/Anti-interference-voice-system.git
-cd voice_pipeline && git lfs pull
+cd voice_pipeline && python tools/download_finetuned.py
 # 单条推理
 python run_inference.py --kws 唤醒.wav --cmd 识别.wav
 # 批量 (比赛格式)
@@ -60,7 +60,7 @@ GTCRN (降噪) → SpEx+ (人声分离) → 3-model Z-score Ensemble (声纹鉴�
 **当前仓库不含训练/微调脚本与产物**，定位为"纯推理流水线"：
 
 - 所有模块均为**官方预训练模型或已微调权重**，运行时自动加载或下载。
-- **微调模型**：CAM++v7 / ERes2NetV2v7 微调权重经 Git LFS 管理（`runs/` 目录），clone 后执行 `git lfs pull`。
+- **微调模型**：CAM++v7 / ERes2NetV2v7 微调权重经 HuggingFace/GitHub Releases 托管（`finetuned_models/` 目录），clone 后执行 `python tools/download_finetuned.py`。
 - 仓库内仅保留推理必需代码：`pipeline.py`、`run_inference.py`、`modules/`、`configs/`、`tools/download_*.py`（权重下载）。
 
 ## 性能对比 (datasetA, 80分制 = CER×40 + RR×40)
@@ -117,7 +117,7 @@ python -m venv .venv
 | ~~GTCRN~~ → Renoise | noisereduce 库内置（V8 不再使用 GTCRN） |
 | SpEx+ | `pretrained/spex_plus/checkpoint.pth` |
 | WeSpeaker ResNet34 | `pretrained/wespeaker_resnet34/wespeaker_zh_cnceleb_resnet34.onnx` |
-| CAM++ / ERes2NetV2 (微调) | `runs/camplus_v7_full/`、`runs/eres2netv2_v7_full/`（Git LFS） |
+| CAM++ / ERes2NetV2 (微调) | `finetuned_models/`（`python tools/download_finetuned.py` 下载） |
 | Fun-ASR-Nano-2512 | ModelScope 运行时自动下载 |
 
 SpEx+ 检查点固定 SHA256：

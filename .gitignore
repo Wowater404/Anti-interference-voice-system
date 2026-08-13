@@ -44,6 +44,8 @@ run_full_inference.bat
 runs/
 
 # === 微调产物 (权重/日志, 不上传; 仓库保持纯推理状态) ===
+# 微调权重改由 tools/download_finetuned.py 从 HuggingFace/GitHub Releases 下载
+finetuned_models/
 
 # === IDE 配置 ===
 .idea/

@@ -103,6 +103,9 @@ python -m venv .venv
 下载模型权重：
 
 ```powershell
+# 微调声纹权重 (CAM++v7 / ERes2NetV2v7)
+.\.venv\Scripts\python.exe tools\download_finetuned.py
+
 # SpEx+ 人声分离模型
 .\.venv\Scripts\python.exe tools\download_spexplus.py
 
@@ -178,6 +181,7 @@ modules/voiceprint.py             声纹鉴别模块（CAM++/ERes2NetV2/ResNetSE
 modules/asr.py                    语音识别模块（Fun-ASR-Nano/SenseVoice/Paraformer/Whisper）
 utils/audio.py                    音频 I/O 工具
 utils/metrics.py                  CER / RR 评估指标
+tools/download_finetuned.py       微调声纹权重下载 (HF/GitHub Releases, SHA256 校验)
 tools/download_spexplus.py        SpEx+ 权重下载与 SHA256 校验
 tools/download_wespeaker.py       WeSpeaker ResNet34 ONNX 权重下载
 TEAM_INTEGRATION_GUIDE.md         团队合并规范 V2

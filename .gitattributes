@@ -1,1 +1,1 @@
-pretrained/spex_plus/checkpoint.pth filter=lfs diff=lfs merge=lfs -text
+# 权重均已迁出 Git LFS，改为脚本下载（download_spexplus.py / download_finetuned.py / download_wespeaker.py）

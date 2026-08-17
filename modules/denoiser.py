@@ -58,10 +58,19 @@ class DeepFilterNet3Denoiser(BaseDenoiser):
     """
 
     def __init__(self, device: str = "cpu", model_dir: Optional[str] = None,
-                 atten_lim_db: int = 6):
+                 atten_lim_db: int = 4, post_filter: bool = False):
         super().__init__(device)
+        # [2026-08-16] model_dir 支持:
+        #  - None → 回退到项目内打包权重 pretrained/deepfilternet3 (避免联网下载)
+        #  - 相对路径 → 相对项目根目录解析
+        #  - 绝对路径 → 直接用
+        if model_dir is None:
+            model_dir = os.path.join(PROJECT_ROOT, "pretrained", "deepfilternet3")
+        elif not os.path.isabs(model_dir):
+            model_dir = os.path.join(PROJECT_ROOT, model_dir)
         self.model_dir = model_dir
         self.atten_lim_db = atten_lim_db
+        self.post_filter = post_filter
 
     def load(self):
         """加载 DeepFilterNet3 模型"""
@@ -71,12 +80,12 @@ class DeepFilterNet3Denoiser(BaseDenoiser):
 
             self.model, self.df_state, _ = init_df(
                 model_base_dir=self.model_dir,
-                post_filter=False,
+                post_filter=self.post_filter,
                 log_level="WARNING"
             )
             self._enhance_fn = enhance
             self._loaded = True
-            print("[DeepFilterNet3] 模型加载成功")
+            print(f"[DeepFilterNet3] 模型加载成功 (atten_lim_db={self.atten_lim_db}, post_filter={self.post_filter})")
         except ImportError:
             print("[DeepFilterNet3] 警告: deepfilternet 未安装, 使用直通模式")
             print("  安装命令: pip install deepfilternet")
@@ -424,7 +433,8 @@ def create_denoiser(config: dict, device: str = "cpu") -> BaseDenoiser:
         return DeepFilterNet3Denoiser(
             device=device,
             model_dir=cfg.get("model_dir"),
-            atten_lim_db=cfg.get("atten_lim_db", 6),
+            atten_lim_db=cfg.get("atten_lim_db", 4),
+            post_filter=cfg.get("post_filter", False),
         )
     elif model_name == "fullsubnet_plus":
         cfg = config.get("fullsubnet_plus", {})

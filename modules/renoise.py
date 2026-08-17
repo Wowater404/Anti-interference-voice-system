@@ -248,6 +248,8 @@ def create_denoiser(config: dict, device: str = "cpu") -> BaseDenoiser:
             device=device,
             stationary=cfg.get("stationary", True),
             prop_decrease=cfg.get("prop_decrease", 0.8),
+            n_std_thresh=cfg.get("n_std_thresh", 1.5),
+            n_fft=cfg.get("n_fft", 1024),
         )
 
     print(f"[Denoiser] 未知模型 {model_name}, 使用直通模式")

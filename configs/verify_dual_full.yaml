@@ -4,13 +4,23 @@ audio:
   sample_width: 2
   format: wav
 denoise:
-  model: renoise
+  # [2026-08-16 11:40] V16: DeepFilterNet3 微调权重 (LibriSpeech clean + DEMAND 噪声, 3 epoch)。
+  # 实测: 预训练 SI-SDR +8.0dB → 微调 +14.9dB (SNR 5dB 场景), 已部署为默认。
+  model: deepfilternet3
   enable: true
+  deepfilternet3:
+    model_dir: pretrained/deepfilternet3_finetuned
+    atten_lim_db: 4
+    post_filter: false
   renoise:
     stationary: false
     prop_decrease: 0.9
     n_std_thresh: 1.0
     n_fft: 1024
+  gtcrn:
+    checkpoint: dns3
+    n_fft: 512
+    hop_length: 256
 separation:
   model: spex_plus
   sepformer16k:
@@ -31,6 +41,12 @@ separation:
   sim_jump_cap: 0.3
   voiceprint_use_separated: false
   asr_use_separated: true
+  # V9: kws 自适应盲分离
+  kws_enable: true             # 是否对 kws 做降噪+自适应盲分离
+  kws_trigger_sim: 0.5         # 降噪后唤醒词 ASR 匹配度低于此值才触发盲分离
+  # [2026-08-15] 能量法预检: 盲分离两轨能量比 < 此值判单人 (伪影轨), 跳过各轨匹配省时
+  # 实测: 真多人重叠 ratio 最低 0.37, 单人伪影通常 < 0.3
+  kws_sep_energy_th: 0.3
 voiceprint:
   model: ensemble
   ensemble:
@@ -45,7 +61,7 @@ voiceprint:
   cam_plus:
     model_id: iic/speech_campplus_sv_zh-cn_16k-common
     embedding_dim: 192
-    finetuned_path: runs/camplus_v7_full/camplus_finetuned_best.pt
+    finetuned_path: runs/camplus_v8_full/camplus_finetuned_best.pt
   eres2netv2:
     model_id: iic/speech_eres2netv2_sv_zh-cn_16k-common
     embedding_dim: 192
@@ -57,6 +73,10 @@ voiceprint:
   threshold: 0.68
   enable: true
 asr:
+  # [2026-08-15 21:20] V13: 指令识别换回 Nano。
+  # 全量实测 Paraformer CER 0.53 (短指令非自回归长度预测缺陷, 53%指令≤6字全踩雷)
+  # vs Nano 0.37。比赛 CER 权重 40%, 速度换精度不划算。
+  # kws 中文快匹配仍用 Paraformer (kws_asr), 英文匹配用 Nano (asr)。
   model: fun_asr_nano
   fun_asr_nano:
     model_dir: FunAudioLLM/Fun-ASR-Nano-2512
@@ -71,8 +91,18 @@ asr:
   paraformer:
     model_name: paraformer-zh
     vad_model: fsmn-vad
-    punc_model: ct-punc
+    punc_model: null
     hotwords: 空调,洗碗机,灯光,风量,制热,暂停,音量
+  # [2026-08-15 21:20] kws 中文快匹配专用 ASR (Paraformer):
+  # 中文快匹配 0.26s (命中~65% 走快路径), 未命中盲分离各轨也用 Paraformer;
+  # 英文唤醒词用主 asr (Nano 英文模式)。
+  kws_asr:
+    enable: true
+    model: paraformer
+    model_name: paraformer-zh
+    vad_model: fsmn-vad
+    punc_model: null
+    hotwords: null
   whisper:
     model_size: base
     language: zh

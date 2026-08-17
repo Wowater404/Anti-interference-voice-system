@@ -59,6 +59,8 @@ def main():
                         help="识别音频路径 (单样本模式)")
     parser.add_argument("--label", type=str, default=None,
                         help="真实标签 (评估用)")
+    parser.add_argument("--kws-text", type=str, default=None,
+                        help="唤醒词文本 (用于 kws 自适应处理的唤醒词定位, 单样本模式用)")
 
     # 配置
     parser.add_argument("--config", type=str, default=None,
@@ -166,7 +168,8 @@ def main():
             kws_path=args.kws,
             cmd_path=args.cmd,
             label=args.label,
-            sample_id="single"
+            sample_id="single",
+            kws_text=args.kws_text
         )
 
         print("\n" + "=" * 60)

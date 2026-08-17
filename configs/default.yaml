@@ -14,17 +14,20 @@ audio:
 # Stage 1: 降噪模型
 # ===========================================================================
 denoise:
-  # 主选: Renoise — 纯Python频谱门限降噪 (调参后: stationary=False 自适应)
-  model: renoise
+  # [2026-08-16] V16 默认降噪: DeepFilterNet3 微调权重 (atten_lim_db=4, post_filter=False)
+  # 微调: LibriSpeech clean + DEMAND 噪声, SI-SDR +8.0→+14.9dB, 优于预训练。
+  model: deepfilternet3
+  enable: true
+  deepfilternet3:
+    model_dir: pretrained/deepfilternet3_finetuned  # 微调权重 (V16)
+    atten_lim_db: 4           # 最大衰减 dB (用户选定参数)
+    post_filter: false        # 后处理滤波
   renoise:
     stationary: false           # 自适应噪声估计 (调参最优)
     prop_decrease: 0.8          # 噪声抑制比例 (0-1, 越大抑制越多)
     n_std_thresh: 1.5           # 阈值标准差倍数 (越高越保守)
     n_fft: 1024                 # FFT 点数
   # 备选模型 (保留参考)
-  deepfilternet3:
-    model_dir: null           # null = 用官方预训练权重
-    atten_lim_db: 6           # 最大衰减 dB
   gtcrn:
     checkpoint: dns3           # dns3 (通用噪声) 或 vctk (人声)
     n_fft: 512                 # STFT 帧长
@@ -65,6 +68,9 @@ separation:
   # 以下两个开关在自适应模式下忽略 (保留供非自适应实验):
   voiceprint_use_separated: false # (自适应模式下忽略)
   asr_use_separated: true         # (自适应模式下忽略)
+  # V9: kws 自适应盲分离
+  kws_enable: true             # 是否对 kws 做降噪+自适应盲分离
+  kws_trigger_sim: 0.5         # 降噪后唤醒词 ASR 匹配度低于此值才触发盲分离
 
 # ===========================================================================
 # Stage 3: 声纹鉴别

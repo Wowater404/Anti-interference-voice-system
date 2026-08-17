@@ -1,9 +1,8 @@
 # === 模型权重 (运行时从 ModelScope/HuggingFace/GitHub Releases 自动下载) ===
 # GTCRN 权重体积小且无公开下载源，随仓库提交
+# SpEx+ 权重改由 tools/download_spexplus.py 从 Google Drive 下载
 pretrained/*
 !pretrained/gtcrn/
-!pretrained/spex_plus/
-!pretrained/spex_plus/*
 
 # === 虚拟环境 ===
 .venv/
@@ -59,3 +58,7 @@ Thumbs.db
 # === 环境变量 ===
 .env
 .env.local
+
+# === 临时调试/验证脚本 (V9-V16 开发过程单次分析脚本, 不入库) ===
+/_*.py
+tools/_*.py

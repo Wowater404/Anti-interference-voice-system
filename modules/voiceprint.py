@@ -369,10 +369,16 @@ class ResNetSEExtractor(BaseVoiceprintExtractor):
                  num_threads: int = 4,
                  embedding_dim: int = 256):
         super().__init__(device)
-        self.model_path = model_path or os.path.join(
-            PROJECT_ROOT, "pretrained", "wespeaker_resnet34",
-            "wespeaker_zh_cnceleb_resnet34.onnx"
-        )
+        if model_path is None:
+            model_path = os.path.join(
+                PROJECT_ROOT, "pretrained", "wespeaker_resnet34",
+                "wespeaker_zh_cnceleb_resnet34.onnx"
+            )
+        elif not os.path.isabs(model_path):
+            # config 里给的是相对路径（pretrained/wespeaker_resnet34/...），
+            # 基于 PROJECT_ROOT 解析，避免依赖当前工作目录（os.chdir 会触发 torch 段错误）
+            model_path = os.path.join(PROJECT_ROOT, model_path)
+        self.model_path = model_path
         self.num_threads = num_threads
         self.embedding_dim = embedding_dim
 

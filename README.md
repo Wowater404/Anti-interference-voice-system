@@ -2,15 +2,16 @@
 
 复杂交互场景下的抗干扰语音指令识别流水线，串联降噪、人声分离、声纹鉴别与语音识别四个阶段。
 
-## ⚡ V8 最终方案 (2026-08-12, release/v8-dual-full 分支)
+## ⚡ V16 当前方案 (2026-08-16, release/v16 分支)
 
 ```
-Renoise (降噪) → SpEx+ (自适应分离) → 双微调融合声纹 (CAM++v7+ERes2NetV2v7+ResNetSE) → Fun-ASR-Nano-2512 (ASR)
+DeepFilterNet3微调 (降噪) → SpEx+ 自适应分离 (cmd) / SepFormer16k 盲分离 (kws) → 三模型声纹 (CAM++v8+ERes2NetV2v7+ResNetSE) → Nano + Paraformer 双ASR
 ```
 
-**datasetA 全量成绩: CER 0.3705 | RR 0.9937 | 80分 64.93 | 推理 1566s (GPU)**
+**V8→V16 演进**: 降噪 Renoise→DeepFilterNet3微调 (SI-SDR +8.0→+14.9dB)；声纹 CAM++v7→v8 (EER 0.027→0.0003)；新增 kws 自适应盲分离 (V9)、唤醒词拼音匹配 91.35% (V12)、双ASR 快慢协同 (V13)、训练质量门控 + kws 预处理对齐 (V14)、DF3 微调 (V16)。
 
 - 微调模型权重经 **HuggingFace / GitHub Releases** 托管，clone 后执行 `python tools/download_finetuned.py`（无需 git-lfs）
+- **DF3 微调权重**: 由 `tools/train_df3_finetune.py` 训练产生（LibriSpeech clean + DEMAND 噪声），产出至 `pretrained/deepfilternet3_finetuned/`；无此权重时自动回退官方预训练
 - 详细使用指南见 **`使用说明.md`**（环境搭建/推理命令/常见问题/训练脚本）
 - datasetA 提交文件见 **`results/submission_datasetA_dual.json`**（官方 CER 口径）
 - **数字归一化**: ASR 输出后处理（26→二十六、30%→百分之三十），已接入 `pipeline.py`（`utils/digit_normalize.py`）
@@ -19,10 +20,10 @@ Renoise (降噪) → SpEx+ (自适应分离) → 双微调融合声纹 (CAM++v7+
 ### 快速开始
 
 ```bash
-git clone https://github.com/Wowater404/Anti-interference-voice-system.git
+git clone -b release/v16 https://github.com/Wowater404/Anti-interference-voice-system.git
 cd voice_pipeline && python tools/download_finetuned.py
-# 单条推理
-python run_inference.py --kws 唤醒.wav --cmd 识别.wav
+# 单条推理 (--kws-text 唤醒词文本, 用于唤醒词定位, 可选)
+python run_inference.py --kws 唤醒.wav --cmd 识别.wav [--kws-text 你好科慕]
 # 批量 (比赛格式)
 python run_inference.py --config configs/verify_dual_full.yaml --data_root <dataset目录> --split all --output results/out.json
 ```
@@ -34,17 +35,18 @@ python run_inference.py --config configs/verify_dual_full.yaml --data_root <data
 ## 历史流水线（早期版本，已弃用）
 
 ```
-GTCRN (降噪) → SpEx+ (人声分离) → 3-model Z-score Ensemble (声纹鉴别) → Fun-ASR-Nano-2512 (语音识别)
+V8:  Renoise (降噪) → SpEx+ (人声分离) → 3-model Z-score Ensemble (声纹鉴别) → Fun-ASR-Nano-2512 (语音识别)
+V5:  noisereduce (降噪) → 声纹鉴别 (CAM++微调) → Paraformer (ASR)
 ```
 
-> 以下为早期版本描述，当前 V8 方案降噪已改用 **Renoise**（见上文），声纹已升级为**双微调融合**（CAM++v7 + ERes2NetV2v7 + ResNetSE）。
+> 以下为 V8 及更早版本描述，V16 方案降噪已改用 **DeepFilterNet3 微调**（见上文），声纹已升级为**三模型融合**（CAM++v8 + ERes2NetV2v7 + ResNetSE），识别升级为**双ASR 快慢协同**。
 
 | 阶段 | 模型 | 说明 |
 |------|------|------|
-| Stage 1 降噪 | ~~GTCRN~~ → Renoise | V8 已切换到 Renoise（noisereduce 库，stationary=False 自适应）|
-| Stage 2 分离 | SpEx+ | 目标说话人提取，以唤醒音频为参考（自适应触发）|
-| Stage 3 声纹 | CAM++ + ERes2NetV2 + ResNetSE | Z-score 归一化加权融合 (0.4/0.4/0.2)，前两者 V7 微调 |
-| Stage 4 识别 | Fun-ASR-Nano-2512 | SenseVoice 编码器 + Qwen3-0.6B，800M 参数 |
+| Stage 1 降噪 | ~~GTCRN~~ → ~~Renoise~~ → **DeepFilterNet3微调** | V16 主降噪 DF3 微调（atten_lim_db=4, post_filter=False），Renoise 保留备用 |
+| Stage 2 分离 | SpEx+ (cmd) / SepFormer16k (kws) | cmd 目标说话人提取（以唤醒音频为参考，自适应触发）；kws 无参考盲分离（能量法预检单/多人）|
+| Stage 3 声纹 | CAM++ + ERes2NetV2 + ResNetSE | Z-score 归一化加权融合 (0.4/0.4/0.2)，CAM++v8/ERes2NetV2v7 微调 |
+| Stage 4 识别 | Fun-ASR-Nano-2512 + Paraformer | Nano 指令识别兜底 + Paraformer 中文快匹配（kws 唤醒词定位）|
 
 声纹鉴别阶段采用三模型 Z-score 集成方案：对 CAM++、ERes2NetV2、ResNetSE 三个模型
 分别计算 cosine 相似度，经 Z-score 归一化后按 0.4/0.4/0.2 权重加权融合，以 -0.17
@@ -57,24 +59,25 @@ GTCRN (降噪) → SpEx+ (人声分离) → 3-model Z-score Ensemble (声纹鉴�
 
 ## 纯推理仓库说明
 
-**当前仓库不含训练/微调脚本与产物**，定位为"纯推理流水线"：
+**当前仓库定位为推理流水线**，V16 起附带训练脚本（`tools/train_*.py`）：
 
 - 所有模块均为**官方预训练模型或已微调权重**，运行时自动加载或下载。
-- **微调模型**：CAM++v7 / ERes2NetV2v7 微调权重经 HuggingFace/GitHub Releases 托管（`finetuned_models/` 目录），clone 后执行 `python tools/download_finetuned.py`。
-- 仓库内仅保留推理必需代码：`pipeline.py`、`run_inference.py`、`modules/`、`configs/`、`tools/download_*.py`（权重下载）。
+- **微调模型**：CAM++v8 / ERes2NetV2v7 微调权重经 HuggingFace/GitHub Releases 托管（`finetuned_models/` 目录），clone 后执行 `python tools/download_finetuned.py`。
+- **DF3 降噪微调**：`tools/train_df3_finetune.py`（LibriSpeech + DEMAND），产物不入库，无权重时回退官方预训练。
+- 仓库保留推理必需代码 + 训练流水线：`pipeline.py`、`run_inference.py`、`modules/`、`configs/`、`tools/download_*.py`、`tools/train_*.py`。
 
 ## 性能对比 (datasetA, 80分制 = CER×40 + RR×40)
 
 | 配置 | CER | RR | Score | 推理时间 |
 |------|-----|-----|-------|---------|
-| **V8 双微调 + 数字归一化 (当前)** | **0.3705** | **0.9937** | **64.93** | 1566s (GPU) |
+| **V16 DF3微调 + 三模型v8 + 双ASR (当前)** | **~0.3489** | **0.9951** | **~65.85** | 估算较 V8 快 30%+ |
+| V8 双微调 + 数字归一化 | 0.3705 | 0.9937 | 64.93 | 1566s (GPU) |
 | V8 双微调 (基线, 无归一化) | 0.3793 | 0.9958 | 64.66 | 1427s (GPU) |
 | V5 声纹微调 | 0.4527 | 0.9368 | 59.36 | - |
 | V2 基线 (noisereduce + Paraformer + 预训练声纹) | 0.5833 | 0.9367 | 54.14 | 423s(CPU) |
 | main 全预训练 (GTCRN + SpEx+ + 预训练CAM++ + Paraformer) | 0.6533 | 0.9198 | 50.66 | 632s |
 
-> 微调声纹较预训练提升约 10 分（V5 已实施并验证 59.36）。
-> 数字归一化后处理进一步降低 CER（0.3793→0.3705）。
+> V16 数据为 DF3 调参后的本地实测；正式定版前需跑 V15 vs V16 对照实验量化降噪微调收益（详见 `流水线架构比对_V8_vs_V16.md`）。
 
 ## 最终实验结果（当前分支）
 
@@ -82,10 +85,10 @@ GTCRN (降噪) → SpEx+ (人声分离) → 3-model Z-score Ensemble (声纹鉴�
 
 | 指标 | 结果 |
 |------|------:|
-| CER | 0.3705 |
-| 拒识率 RR | 0.9937 |
-| 识别项得分（80 分制） | 64.93 |
-| 估算总分（100 分制） | ~78.9 |
+| CER | ~0.3489 (DF3 调参后) |
+| 拒识率 RR | ~0.9951 |
+| 识别项得分（80 分制） | ~65.85 |
+| 估算总分（100 分制） | ~79+ |
 
 评分公式：CER 得分 = (1 - CER) × 40，RR 得分 = RR × 40，识别得分 = CER 得分 + RR 得分。
 100 分制另含推理时间（10 分）和内存占用（10 分），此处为估算值（不含推理效率的 10 分）。
@@ -117,8 +120,9 @@ python -m venv .venv
 
 | 模型 | 路径 |
 |------|------|
-| ~~GTCRN~~ → Renoise | noisereduce 库内置（V8 不再使用 GTCRN） |
+| DeepFilterNet3 (微调) | `pretrained/deepfilternet3_finetuned/`（`tools/train_df3_finetune.py` 训练；缺失回退官方预训练） |
 | SpEx+ | `pretrained/spex_plus/checkpoint.pth` |
+| SepFormer16k | `pretrained/sepformer16k/`（SpeechBrain 自动下载） |
 | WeSpeaker ResNet34 | `pretrained/wespeaker_resnet34/wespeaker_zh_cnceleb_resnet34.onnx` |
 | CAM++ / ERes2NetV2 (微调) | `finetuned_models/`（`python tools/download_finetuned.py` 下载） |
 | Fun-ASR-Nano-2512 | ModelScope 运行时自动下载 |
@@ -168,23 +172,35 @@ SpEx+ 检查点固定 SHA256：
 ## 关键文件
 
 ```text
-configs/default.yaml              流水线配置（降噪/分离/声纹/ASR 四阶段参数）
+configs/default.yaml              流水线配置（降噪/分离/声纹/ASR 四阶段参数, V16 默认 DF3 微调）
+configs/verify_dual_full.yaml     比赛验证配置（双ASR + 三模型集成, kws 自适应盲分离）
 config.py                         配置加载模块
-pipeline.py                       完整推理流水线（含 ensemble 批量处理）
-run_inference.py                  推理入口脚本
-modules/denoiser.py               降噪模型工厂
-modules/renoise.py                Renoise 降噪实现（当前 V8 使用）
+pipeline.py                       完整推理流水线（V9-V16: kws 盲分离/唤醒词定位/双ASR 快慢协同）
+run_inference.py                  推理入口脚本（支持 --kws-text 唤醒词定位）
+modules/denoiser.py               降噪模型工厂（DF3 微调权重加载）
+modules/renoise.py                Renoise 降噪实现（备用）
 modules/gtcrn.py                  GTCRN 降噪网络（历史遗留，已弃用）
-modules/separator.py              分离/提取模型工厂
+modules/separator.py              分离/提取模型工厂（含 SepFormer16k 盲分离）
 modules/spexplus_separator.py     SpEx+ 网络与流水线适配器
 modules/voiceprint.py             声纹鉴别模块（CAM++/ERes2NetV2/ResNetSE/Ensemble）
 modules/asr.py                    语音识别模块（Fun-ASR-Nano/SenseVoice/Paraformer/Whisper）
 utils/audio.py                    音频 I/O 工具
 utils/metrics.py                  CER / RR 评估指标
+utils/digit_normalize.py          数字归一化后处理
 tools/download_finetuned.py       微调声纹权重下载 (HF/GitHub Releases, SHA256 校验)
 tools/download_spexplus.py        SpEx+ 权重下载与 SHA256 校验
 tools/download_wespeaker.py       WeSpeaker ResNet34 ONNX 权重下载
+tools/train_df3_finetune.py       [V16] DF3 降噪微调 (LibriSpeech + DEMAND)
+tools/train_eres2netv2_finetune.py [V14] ERes2NetV2 说话人微调
+tools/run_train_pipeline.py       [V14] 训练流水线入口（数据准备→质量门控→声纹微调）
+tools/prepare_processed_train_data.py [V14] 训练数据预处理（kws+cmd 全链路降噪/分离）
+tools/quality_gate.py             [V14] 训练数据质量门控过滤
+tools/augment_dataset_incremental.py [V14] 增量数据增强
+tools/measure_v16_perf.py         [V16] 推理性能剖析工具
+唤醒词定位KWS方案.md              [V12] 唤醒词拼音匹配方案文档
+训练流水线使用说明（质量门控版）.md [V14] 训练流水线使用文档
+训练说明.md                       训练脚本说明
 TEAM_INTEGRATION_GUIDE.md         团队合并规范 V2
 ```
 
-`pretrained/`（GTCRN 除外）、`results/`、虚拟环境和缓存均不进入 Git 提交。
+`pretrained/`（GTCRN 除外）、`results/`、`runs/`、虚拟环境和缓存均不进入 Git 提交。

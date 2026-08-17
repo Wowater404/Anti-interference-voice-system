@@ -234,11 +234,21 @@ class ParaformerASR(BaseASR):
         save_wav(tmp_path, audio, sr)
 
         try:
-            result = self.model.generate(
-                input=tmp_path,
-                batch_size_s=300,
-            )
+            gen_kwargs = {
+                "input": tmp_path,
+                "batch_size_s": 300,
+            }
+            # [2026-08-15] 启用热词偏置 (config 已配: 空调,洗碗机,灯光...)
+            # 注意: 空/None 不传 (funasr 对空 hotwords 可能崩溃)
+            if self.hotwords:
+                gen_kwargs["hotwords"] = self.hotwords
+            result = self.model.generate(**gen_kwargs)
             text = result[0]["text"] if result else ""
+            # [2026-08-15] 文本清洗: 官方 normalize_text (NFKC+小写+去空白/标点)
+            # Paraformer 输出可能带字符间空格 (无 punc 模型时), 必须清洗后才与 label 可比
+            if text:
+                from utils.metrics import strip_punctuation
+                text = strip_punctuation(text)
         except Exception as e:
             print(f"[Paraformer] 识别错误: {e}")
             text = ""
@@ -382,11 +392,17 @@ class FunASRNanoASR(BaseASR):
         try:
             from funasr import AutoModel
 
-            self.model = AutoModel(
+            # [2026-08-15] fp16 加速: 环境变量 PPS_ASR_FP16=1 启用半精度推理
+            # (LLM 自回归解码在 fp16 下约快 1.5-2x, CER 通常不变或微降, 需 A/B 验证)
+            _kwargs = dict(
                 model=self.model_dir,
                 device=self.device,
                 disable_update=True,
             )
+            if os.environ.get("PPS_ASR_FP16", "0") == "1":
+                _kwargs["dtype"] = "fp16"
+                print("[Fun-ASR-Nano] fp16 半精度推理已启用 (PPS_ASR_FP16=1)")
+            self.model = AutoModel(**_kwargs)
             self._loaded = True
             print(f"[Fun-ASR-Nano] 模型加载成功 ({self.model_dir})")
         except ImportError:

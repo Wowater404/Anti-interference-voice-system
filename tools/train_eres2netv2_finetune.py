@@ -50,6 +50,13 @@ if os.path.isdir(_lib_bin):
 
 # === PyTorch 2.5 兼容性修复 (同 voiceprint.py) ===
 import torch
+
+# [2026-08-15] cuDNN 加载修复: 把 conda 环境 Library/bin 注入 PATH,
+# 否则 cudnn64_9.dll 的子 DLL 找不到 → "Invalid handle: Cannot load symbol cudnnGetVersion"。
+import os as _os
+_lib_bin = _os.path.abspath(_os.path.join(_os.path.dirname(__import__('sys').executable), 'Library', 'bin'))
+if _os.path.isdir(_lib_bin):
+    _os.environ['PATH'] = _lib_bin + _os.pathsep + _os.environ.get('PATH', '')
 # cuDNN 加载失败修复: torch 2.7.0 加载 cudnn 报 Invalid handle (版本不匹配)
 # → 禁用 cuDNN, 用 PyTorch 原生卷积 (慢 ~3-5x, 但可用)
 torch.backends.cudnn.enabled = False

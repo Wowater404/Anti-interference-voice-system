@@ -47,6 +47,10 @@ separation:
   # [2026-08-15] 能量法预检: 盲分离两轨能量比 < 此值判单人 (伪影轨), 跳过各轨匹配省时
   # 实测: 真多人重叠 ratio 最低 0.37, 单人伪影通常 < 0.3
   kws_sep_energy_th: 0.3
+  # [2026-08-17] V17.1 省时优化 (冒烟 95% 一致, 全量 91.19%)
+  kws_early_stop: true         # 语言早停: 纯英文词英文先跑命中即停, 含中文词中文先跑; 未命中补跑另一语言
+  kws_energy_gate: true        # 能量法保守版: 判单人→先降噪整体匹配命中即停, 未命中再各轨 (保留全部路径)
+  kws_para_quick: true         # 中文 Paraformer 快筛(0.26s)命中即停, 未命中 Nano 复核; 双 ASR 并集命中率更高且省 46% 时间
 voiceprint:
   model: ensemble
   ensemble:
@@ -65,7 +69,7 @@ voiceprint:
   eres2netv2:
     model_id: iic/speech_eres2netv2_sv_zh-cn_16k-common
     embedding_dim: 192
-    finetuned_path: runs/eres2netv2_v7_full/camplus_finetuned_best.pt
+    finetuned_path: runs/eres2netv2_v8_full/camplus_finetuned_best.pt
   resnetse:
     model_path: pretrained/wespeaker_resnet34/wespeaker_zh_cnceleb_resnet34.onnx
     num_threads: 4

@@ -107,6 +107,16 @@ class VoicePipeline:
         # [2026-08-15] 能量法预检: 盲分离两轨中第二轨能量占比 < 此阈值判为单人
         # (盲分离对单人 kws 产生的是伪影轨, 能量显著低于主轨, 无需各轨匹配)
         self.kws_sep_energy_th = config.separation.get("kws_sep_energy_th", 0.15)
+        # [2026-08-17 V17.1] 省时优化开关:
+        #   kws_early_stop: 语言早停 (纯中文词只先跑中文模式, 命中即停; 未命中补英文)
+        #   kws_energy_gate: 能量法保守版 (判单人→先降噪整体匹配, 命中即停; 未命中再各轨)
+        # 两者都保留所有匹配路径 (未命中补跑), 命中率数学上不变, 只省 ASR 调用次数。
+        self.kws_early_stop = config.separation.get("kws_early_stop", False)
+        self.kws_energy_gate = config.separation.get("kws_energy_gate", False)
+        # [2026-08-17] kws_para_quick: 中文 Paraformer 快筛 (0.26s) 命中即停, 未命中 Nano 复核兜底。
+        #   实测 300 中文样本: Paraformer 直接命中 79%, 与 Nano(80.67%)互补,
+        #   双 ASR 并集直接命中 85%+ (比纯 Nano 高), 且中文匹配耗时 0.72s→0.39s (省 46%)。
+        self.kws_para_quick = config.separation.get("kws_para_quick", False)
         # [2026-08-15] 指令识别"先轻后重": 指令词表 (从全量 label 标定, 含≥1词判Paraformer输出可靠)
         self._instruct_words = [
             "什么", "调到", "吃什", "模式", "打开", "空调", "播放", "二十", "风速", "到二",
@@ -158,30 +168,40 @@ class VoicePipeline:
 
         self._models_loaded = False
 
-    def load_models(self):
-        """加载所有模型权重"""
+    def load_models(self, load_kws_only: bool = False):
+        """加载模型权重
+
+        Args:
+            load_kws_only: 仅加载 kws 命中率统计需要的模型
+                (降噪 + kws 盲分离 + 主 ASR Nano), 跳过声纹三模型与 Paraformer。
+                用于 stats_kws_hit.py: RTX 4050 6GB 显存下全量加载会 OOM/卡死,
+                kws 匹配只用 _match_kws (denoiser + kws_separator + asr), 声纹/Paraformer 不需要。
+        """
         print("=" * 60)
-        print("正在加载流水线模型...")
+        print("正在加载流水线模型..." + (" (轻量模式: 仅 kws 统计所需)" if load_kws_only else ""))
         print("=" * 60)
 
         # 按依赖顺序加载
-        # 1. 声纹提取器 (最先加载, 其他模块可能依赖)
-        print("\n[1/4] 加载声纹提取模型...")
-        self.voiceprint_extractor.load()
-        if self.config.voiceprint.get("enable", True):
-            if self.is_ensemble:
-                # 集成模式: 检查三个子模型
-                ens = self.voiceprint_extractor
-                if ens.cam.model is None or ens.eres.model is None or ens.rnet.model is None:
+        # 1. 声纹提取器 (最先加载, 其他模块可能依赖) —— 轻量模式下跳过
+        if not load_kws_only:
+            print("\n[1/4] 加载声纹提取模型...")
+            self.voiceprint_extractor.load()
+            if self.config.voiceprint.get("enable", True):
+                if self.is_ensemble:
+                    # 集成模式: 检查三个子模型
+                    ens = self.voiceprint_extractor
+                    if ens.cam.model is None or ens.eres.model is None or ens.rnet.model is None:
+                        raise RuntimeError(
+                            "三模型集成声纹加载失败 (CAM++/ERes2NetV2/ResNetSE),"
+                            "已停止流水线"
+                        )
+                elif self.voiceprint_extractor.model is None:
                     raise RuntimeError(
-                        "三模型集成声纹加载失败 (CAM++/ERes2NetV2/ResNetSE),"
-                        "已停止流水线"
+                        f"声纹模型 {self.config.voiceprint.get('model')} 加载失败，"
+                        "已停止流水线，防止使用零向量产生无效结果"
                     )
-            elif self.voiceprint_extractor.model is None:
-                raise RuntimeError(
-                    f"声纹模型 {self.config.voiceprint.get('model')} 加载失败，"
-                    "已停止流水线，防止使用零向量产生无效结果"
-                )
+        else:
+            print("\n[跳过] 声纹提取模型 (轻量模式)")
 
         # 2. 降噪模型
         print("\n[2/4] 加载降噪模型...")
@@ -192,7 +212,8 @@ class VoicePipeline:
         print(f"  当前分离模型: {self.separator_model_name}")
         self.separator.load()
         if (
-            self.separation_enabled
+            not load_kws_only
+            and self.separation_enabled
             and self.separator_model_name not in ("passthrough", "none")
             and not isinstance(self.separator, PassThroughSeparator)
             and self.separator.model is None
@@ -220,8 +241,9 @@ class VoicePipeline:
 
         # 4b. kws 中文快匹配专用 ASR (Paraformer) [2026-08-15 21:20 V13]
         # 角色互换: 主 asr=Nano (指令识别+英文匹配), kws_asr=Paraformer (中文快匹配 0.26s)
+        # 轻量模式: 仅当启用 Paraformer 快筛 (kws_para_quick) 时加载, 否则跳过省显存
         _kws_asr_cfg = self.config.asr.get("kws_asr") or {}
-        if _kws_asr_cfg.get("enable", True):
+        if (not load_kws_only or self.kws_para_quick) and _kws_asr_cfg.get("enable", True):
             from modules.asr import create_asr as _create_asr
             _kws_model = _kws_asr_cfg.get("model", "paraformer")
             if _kws_model == "paraformer":
@@ -305,78 +327,121 @@ class VoicePipeline:
         return dp[len(r)][len(h)]
 
     def _wakeword_sim(self, kw: str, hyp: str) -> float:
-        """唤醒词匹配相似度 = max(序列相似度, 编辑距离分, 子串覆盖), 范围 [0,1]"""
+        """唤醒词匹配相似度 = max(全串SequenceMatcher, 全串编辑距离, 子串匹配), 范围 [0,1]
+        [2026-08-17 V17.2] 修正 bug: 子串匹配用 SequenceMatcher.ratio 而非编辑距离。
+        逆向 V12 jsonl 确认: 中文 '你好科慕'→0.9412=16/17 精确是 SequenceMatcher ratio(2M/(a+b)),
+        英文 hicomeon→0.8571 也是 SequenceMatcher。之前用编辑距离(1-d/max)导致英文 sim 系统性偏低,
+        是英文直接命中率 75% vs V12 90% 的根源 (实测 273 条英文: 编辑距离子串 73.6% vs seq子串 82.1%)。
+        """
         kp = self._to_phonetic(kw)
         hp = self._to_phonetic(hyp)
         if not kp or not hp:
             return 0.0
+        # 全串 SequenceMatcher
+        from difflib import SequenceMatcher
+        s_seq = SequenceMatcher(None, kp, hp).ratio()
+        # 全串编辑距离
         lev = self._edit_dist(kp, hp)
-        s1 = 1 - lev / len(kp)                      # 序列相似度 (分母=kw长度, 1-CER式)
-        s2 = 1 - lev / max(len(kp), len(hp))        # 编辑距离分 (分母=较长者)
-        s3 = 0.0
-        if kp in hp or hp in kp:                     # 子串覆盖
-            s3 = min(len(kp), len(hp)) / max(len(kp), len(hp))
-        return max(0.0, s1, s2, s3)
+        s_edit = 1 - lev / max(len(kp), len(hp))
+        # 子串匹配: 找 hp 中与 kp 最匹配的连续子串 (SequenceMatcher ratio)
+        best_sub = 0.0
+        for i in range(len(hp)):
+            for j in range(i + 1, len(hp) + 1):
+                sub = hp[i:j]
+                best_sub = max(best_sub, SequenceMatcher(None, kp, sub).ratio())
+        return max(0.0, s_seq, s_edit, best_sub)
 
-    def _match_kws(self, audio: np.ndarray, kws_text: str, sr: int):
+    def _match_kws(self, audio: np.ndarray, kws_text: str, sr: int, sep_audio: Optional[np.ndarray] = None):
         """
-        V12 混合唤醒词匹配 (先轻后重):
-          英文 → Nano 英文模式直接匹配 (Paraformer 英文必败)
-          中文 → Paraformer 快匹配 → 未命中 Nano 复核
-          全部未命中 → 盲分离 → 各轨匹配选轨
+        V17 唤醒词匹配 (回调 91.35% 命中率方案, 2026-08-14 全量验证):
+          匹配输入 = 原始音频 (不降噪; 降噪伤 ASR 唤醒词识别, 91.35% vs ~72%)
+          ASR = FunASR Nano 双模式 (中文+英文各识别取最高分; 不用 Paraformer!)
+          中文 → 未命中再盲分离 (sep_audio=降噪后) 各轨双模式取最高
+          英文 → 不盲分离 (实测盲分离对英文有害: 80%→53%)
         返回 (best_audio, meta, matched)
-          best_audio: 匹配命中的音频 (选轨结果或降噪整体)
+          best_audio: 声纹锚点音频 (直接命中=sep_audio 降噪整体; 分离命中=分离轨)
           meta: 处理记录 (kws_separated 等)
           matched: 是否命中唤醒词 (sim >= kws_trigger_sim)
         """
         meta = {"kws_denoised": True, "kws_separated": False}
+        sep_input = sep_audio if sep_audio is not None else audio
         is_english = any(c.isalpha() and ord(c) < 128 for c in kws_text)
+        # 语言优先级: 纯英文词→英文先; 含中文词→中文先 (混合词双模式顺序无影响)
+        lang_order = ("英文", "中文") if is_english else ("中文", "英文")
 
-        def _match(asr, seg, lang=None):
-            if lang is not None and asr is not None:
-                old = getattr(asr, "language", None)
-                try:
-                    if old:
-                        asr.language = lang
-                    hyp = self._asr_text(seg, sr, asr)
-                finally:
-                    if old:
-                        asr.language = old
-            else:
-                hyp = self._asr_text(seg, sr, asr)
+        def _match_lang(seg, lang):
+            old = getattr(self.asr, "language", None)
+            try:
+                if old:
+                    self.asr.language = lang
+                hyp = self._asr_text(seg, sr, self.asr)
+            finally:
+                if old:
+                    self.asr.language = old
             return self._wakeword_sim(kws_text, hyp)
 
-        # 1. 英文: 主 asr (Nano) 英文模式直接匹配 (Paraformer 英文必败)
+        def _dual_match(seg):
+            """Nano 双模式: 中文+英文各识别取最高分 (V17 原始口径)"""
+            best = -1.0
+            for lang in ("中文", "英文"):
+                best = max(best, _match_lang(seg, lang))
+            return best
+
+        def _early_match(seg):
+            """V17.1 语言早停: 优先语言先跑, 命中即停; 未命中补跑另一语言。
+            与双模式结果等价 (未命中必补跑), 但多数样本只跑 1 次 ASR。"""
+            best = -1.0
+            for lang in lang_order:
+                best = max(best, _match_lang(seg, lang))
+                if best >= self.kws_trigger_sim:
+                    break  # 命中即停
+            return best
+
+        match_fn = _early_match if self.kws_early_stop else _dual_match
+
+        # 1a. 中文 Paraformer 快筛 (0.26s) 命中即停, 未命中 Nano 复核兜底
+        #     [2026-08-17] 实测 300 中文样本: Paraformer 直接命中 79% 与 Nano(80.67%)互补,
+        #     双 ASR 并集直接命中 85%+ (比纯 Nano 高), 中文匹配耗时 0.72s→0.39s (省 46%)。
+        if self.kws_para_quick and not is_english and self.kws_asr is not None:
+            _hyp_p = self._asr_text(audio, sr, self.kws_asr)
+            if self._wakeword_sim(kws_text, _hyp_p) >= self.kws_trigger_sim:
+                return sep_input, meta, True
+
+        # 1. 原始音频匹配 (V17.1 可早停) (中英文通吃, 91.35% 方案核心)
+        if match_fn(audio) >= self.kws_trigger_sim:
+            return sep_input, meta, True
+
+        # 2. 英文唤醒词不盲分离 (8-14 定稿: 盲分离对英文有害 整体 54.4% < 63.3%)
+        #    [2026-08-17] 之前 V17 误把英文也盲分离了, 导致命中率掉 2pp。
+        #    8-14 最终定稿明确 "中文盲分离(多人声) + 英文不盲分离"。
         if is_english:
-            if _match(self.asr, audio, "英文") >= self.kws_trigger_sim:
-                return audio, meta, True
+            return sep_input, meta, False
 
-        # 2. 中文: kws_asr (Paraformer) 快匹配 (0.26s, 命中约65%走快路径)
-        elif not is_english and self.kws_asr is not None:
-            if _match(self.kws_asr, audio) >= self.kws_trigger_sim:
-                return audio, meta, True
-
-        # 3. 全部未命中 → 盲分离 → 能量法预检 → 各轨匹配选轨 (选"说唤醒词的轨")
+        # 3. 中文未命中 → 盲分离 → 各轨匹配选最高分 (V12 全量方案, 8-14 定稿)
+        #    [V17.1] kws_energy_gate=True 时: 能量法判单人 → 先降噪整体匹配 (命中即停),
+        #    未命中再各轨匹配 (保留全部路径, 命中率不变, 省 4 次 ASR)。
         try:
-            _, sources = self.kws_separator.separate(audio, sr)
+            _, sources = self.kws_separator.separate(sep_input, sr)
         except Exception:
-            return audio, meta, False
+            return sep_input, meta, False
         if not sources or len(sources) <= 1:
-            return audio, meta, False
-        # [2026-08-15] 能量法预检: 第二轨能量占比低 = 单人 (盲分离伪影),
-        # 直接用降噪整体提声纹, 跳过各轨 ASR 匹配 (省 ~0.5s)。
-        if self._sep_is_single(sources, self.kws_sep_energy_th):
-            return audio, meta, False
+            return sep_input, meta, False
+        if self.kws_energy_gate and self._sep_is_single(sources, self.kws_sep_energy_th):
+            # 判单人: 先降噪整体匹配 (命中即停), 未命中才各轨 (保留路径)
+            sim_whole = match_fn(sep_input)
+            if sim_whole >= self.kws_trigger_sim:
+                return sep_input, meta, True
         meta["kws_separated"] = True
-        best_audio, best_sim = audio, -1.0
+        best_audio, best_sim = sep_input, -1.0
         for src in sources:
-            # V13: 英文各轨用主 asr (Nano 英文), 中文各轨用 kws_asr (Paraformer)
-            if is_english:
-                sim = _match(self.asr, src, "英文")
-            else:
-                sim = _match(self.kws_asr, src) if self.kws_asr is not None else _match(self.asr, src)
+            sim = match_fn(src)
             if sim > best_sim:
                 best_sim, best_audio = sim, src
+        # 各轨未命中 → 回退降噪整体再匹配 (16:07 综合优化 "盲分离不命中回退原始音频")
+        if best_sim < self.kws_trigger_sim:
+            sim_fb = match_fn(sep_input)
+            if sim_fb > best_sim:
+                best_sim, best_audio = sim_fb, sep_input
         return best_audio, meta, best_sim >= self.kws_trigger_sim
 
     def _sep_is_single(self, sources, threshold: float = 0.15) -> bool:
@@ -464,14 +529,17 @@ class VoicePipeline:
                 fused = all_emb[0]
             return fused, all_emb
 
-        # Step 1: 降噪
+        # Step 1: 降噪 (盲分离与声纹兜底用; kws 匹配用原始音频, 见下)
         denoised = self.denoiser.denoise(audio, sr)
 
-        # V12 决策 (2026-08-15): 恢复"唤醒词文本匹配"核心架构 (91.35% 方案)。
-        # 流程: 降噪 → 混合匹配 (中文Paraformer快匹配/英文Nano) → 未命中盲分离选轨。
-        # 匹配命中 → 用命中音频提声纹锚点 (更干净); 未命中 → 降噪整体 (V11 行为兜底)。
+        # V17 决策 (2026-08-17): 回调 91.35% 命中率方案。
+        # 实测矩阵: V16.1(降噪匹配+Nano复核)=72.74%, V15(预训练DF3降噪+复核)=72.25%,
+        # V12(原始音频+Paraformer)=91.35% → 降噪本身伤唤醒词匹配, 与降噪模型版本无关。
+        # 因此匹配输入改回原始音频; 盲分离仍用降噪后音频 (SepFormer 对噪声敏感);
+        # 直接命中 → 用降噪整体提声纹锚点 (声纹质量不因噪声恶化)。
         if kws_text and self.kws_enable:
-            matched_audio, kws_meta, matched = self._match_kws(denoised, kws_text, sr)
+            matched_audio, kws_meta, matched = self._match_kws(audio, kws_text, sr,
+                                                               sep_audio=denoised)
             meta.update(kws_meta)
             if matched:
                 emb, all_emb = _extract_fused(matched_audio)
@@ -844,7 +912,7 @@ class VoicePipeline:
         return submission
 
     def process_dataset_ensemble(self, data_root: str, split: str = "all",
-                                  checkpoint_path: str = None) -> Dict:
+                                  checkpoint_path: str = None, limit: int = None) -> Dict:
         """
         三模型 Z-score 集成批量处理 (CAM++ + ERes2NetV2 + ResNetSE)
 
@@ -893,6 +961,13 @@ class VoicePipeline:
 
         print(f"\n[Ensemble] 共 {len(all_samples)} 条样本")
 
+        # [2026-08-17] limit: 小样本测速用 (均衡采样 pos/neg, Z-score 统计量会失真, 仅供测速/CER量级参考)
+        if limit is not None:
+            _pos = [s for s in all_samples if s["_split"] == "pos"][: limit // 2]
+            _neg = [s for s in all_samples if s["_split"] == "neg"][: limit - len(_pos)]
+            all_samples = _pos + _neg
+            print(f"[Ensemble] limit={limit} → 采样 pos {len(_pos)} + neg {len(_neg)}")
+
         # === Phase 1: 降噪 + 声纹提取 + 原始相似度 ===
         print("\n[Phase 1] 降噪 + 三模型声纹提取...")
         raw_sims = []  # [(cam_sim, eres_sim, rnet_sim), ...]
@@ -914,12 +989,10 @@ class VoicePipeline:
 
             # 三模型声纹提取 (降噪后 cmd)
             den_cam, den_eres, den_rnet = ens.extract_all(denoised, sr)
-            den_fused = self.voiceprint_extractor.extract(denoised, sr)
 
-            # kws 处理 (V10: 降噪 → 盲分离 → 用 cmd 融合声纹选轨), 三模型声纹复用
+            # kws 处理 (V17: 匹配用原始音频 + 盲分离; ref_embedding 已弃用, 不再重复提取 cmd 声纹)
             kws_processed, _, _, kws_all = self._process_kws(
                 kws_audio, kws_text, sr,
-                ref_embedding=den_fused,
             )
             kws_cam, kws_eres, kws_rnet = kws_all[0], kws_all[1], kws_all[2]
 

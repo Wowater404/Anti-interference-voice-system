@@ -466,16 +466,24 @@ class EnsembleVoiceprintExtractor:
         """
         用三个模型分别提取声纹 embedding
 
+        优化: ResNetSE (sherpa-onnx CPU) 与 CAM++/ERes2NetV2 (GPU) 并行,
+        GPU 前向在 no_grad 下释放 GIL, CPU 推理可同时进行, 省 ResNetSE 串行耗时。
+
         Returns:
             (cam_emb, eres_emb, rnet_emb): 三个模型的 embedding
         """
         if not self._loaded:
             self.load()
-        return (
-            self.cam.extract(audio, sr),
-            self.eres.extract(audio, sr),
-            self.rnet.extract(audio, sr),
-        )
+        import threading
+        _rnet_box = {}
+        def _run_rnet():
+            _rnet_box["emb"] = self.rnet.extract(audio, sr)
+        _t = threading.Thread(target=_run_rnet, daemon=True)
+        _t.start()
+        cam_emb = self.cam.extract(audio, sr)
+        eres_emb = self.eres.extract(audio, sr)
+        _t.join()
+        return (cam_emb, eres_emb, _rnet_box["emb"])
 
     def extract(self, audio: np.ndarray, sr: int = 16000) -> np.ndarray:
         """

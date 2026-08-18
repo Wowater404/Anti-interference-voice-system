@@ -107,16 +107,16 @@ class VoicePipeline:
         # [2026-08-15] 能量法预检: 盲分离两轨中第二轨能量占比 < 此阈值判为单人
         # (盲分离对单人 kws 产生的是伪影轨, 能量显著低于主轨, 无需各轨匹配)
         self.kws_sep_energy_th = config.separation.get("kws_sep_energy_th", 0.15)
-        # [2026-08-17 V17.1] 省时优化开关:
+        # [2026-08-17 V17.1] 省时优化开关 (默认 True: 任何 config 克隆后即省时, 想关可在 config 显式 false):
         #   kws_early_stop: 语言早停 (纯中文词只先跑中文模式, 命中即停; 未命中补英文)
         #   kws_energy_gate: 能量法保守版 (判单人→先降噪整体匹配, 命中即停; 未命中再各轨)
         # 两者都保留所有匹配路径 (未命中补跑), 命中率数学上不变, 只省 ASR 调用次数。
-        self.kws_early_stop = config.separation.get("kws_early_stop", False)
-        self.kws_energy_gate = config.separation.get("kws_energy_gate", False)
+        self.kws_early_stop = config.separation.get("kws_early_stop", True)
+        self.kws_energy_gate = config.separation.get("kws_energy_gate", True)
         # [2026-08-17] kws_para_quick: 中文 Paraformer 快筛 (0.26s) 命中即停, 未命中 Nano 复核兜底。
         #   实测 300 中文样本: Paraformer 直接命中 79%, 与 Nano(80.67%)互补,
         #   双 ASR 并集直接命中 85%+ (比纯 Nano 高), 且中文匹配耗时 0.72s→0.39s (省 46%)。
-        self.kws_para_quick = config.separation.get("kws_para_quick", False)
+        self.kws_para_quick = config.separation.get("kws_para_quick", True)
         # [2026-08-15] 指令识别"先轻后重": 指令词表 (从全量 label 标定, 含≥1词判Paraformer输出可靠)
         self._instruct_words = [
             "什么", "调到", "吃什", "模式", "打开", "空调", "播放", "二十", "风速", "到二",

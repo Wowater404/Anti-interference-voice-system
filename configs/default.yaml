@@ -64,13 +64,19 @@ separation:
   max_speakers: 2              # 比赛说明: 同一时间最多2个说话人
   vp_threshold_separated: 0.2805
   sep_trigger_min: 0.0
-  sim_jump_cap: 0.0625
+  sim_jump_cap: 0.3
   # 以下两个开关在自适应模式下忽略 (保留供非自适应实验):
   voiceprint_use_separated: false # (自适应模式下忽略)
   asr_use_separated: true         # (自适应模式下忽略)
   # V9: kws 自适应盲分离
   kws_enable: true             # 是否对 kws 做降噪+自适应盲分离
   kws_trigger_sim: 0.5         # 降噪后唤醒词 ASR 匹配度低于此值才触发盲分离
+  # [2026-08-18] V17.1 省时优化 (与 verify_dual_full.yaml 对齐, 默认启用):
+  # 组员 clone 后无需手动改配置, 直接跑就是省时版。
+  kws_sep_energy_th: 0.3       # 能量法判单人阈值
+  kws_early_stop: true         # 语言早停: 命中即停, 省一半 ASR
+  kws_energy_gate: true        # 能量法保守版: 判单人先降噪整体匹配
+  kws_para_quick: true         # 中文 Paraformer 快筛 (0.26s 代替 Nano 0.86s)
 
 # ===========================================================================
 # Stage 3: 声纹鉴别
@@ -134,6 +140,15 @@ asr:
     vad_model: fsmn-vad
     punc_model: ct-punc
     hotwords: "空调,洗碗机,灯光,风量,制热,暂停,音量"
+  # [2026-08-18] kws 中文快匹配专用 ASR (Paraformer): 与 verify_dual_full.yaml 对齐。
+  # kws_para_quick=true 时用它做中文快筛 (0.26s), 英文用主 asr (Nano)。
+  kws_asr:
+    enable: true
+    model: paraformer
+    model_name: paraformer-zh
+    vad_model: fsmn-vad
+    punc_model: null
+    hotwords: null
   whisper:
     model_size: base
     language: zh

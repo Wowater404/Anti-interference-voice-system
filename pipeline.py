@@ -181,6 +181,21 @@ class VoicePipeline:
         print("正在加载流水线模型..." + (" (轻量模式: 仅 kws 统计所需)" if load_kws_only else ""))
         print("=" * 60)
 
+        # [2026-08-18] GPU 检测诊断 (组员克隆后 CPU 运行排查):
+        # 所有模型(DF3/声纹/ASR/分离)的 GPU 使用最终都取决于 torch.cuda.is_available()。
+        # 若配置要 GPU 但 torch 是 CPU 版 (pip install torch 默认装 CPU 版),
+        # 所有模型会静默跑 CPU (慢 10-20 倍), 表现为降噪 100ms -> 1.2s。
+        import torch as _torch_diag
+        _cuda_ok = _torch_diag.cuda.is_available()
+        _gpu_name = _torch_diag.cuda.get_device_name(0) if _cuda_ok else "无(CPU)"
+        print(f"[Device] 推理设备: {self.device} | CUDA 可用: {_cuda_ok} | GPU: {_gpu_name}")
+        if self.device != "cpu" and not _cuda_ok:
+            print("⚠️⚠️ 警告: 配置要求 GPU 但 torch 检测不到 CUDA, 所有模型将跑 CPU (慢 10-20 倍)!")
+            print("  原因: PyTorch 是 CPU 版 (pip install torch 默认装 CPU 版, 不带 CUDA 支持)")
+            print("  修复: pip install torch --index-url https://download.pytorch.org/whl/cu121")
+            print("  验证: python -c \"import torch; print(torch.cuda.is_available())\" 应输出 True")
+            print("  若已有 NVIDIA 驱动, 也可用 conda 安装: conda install pytorch pytorch-cuda -c pytorch -c nvidia")
+
         # 按依赖顺序加载
         # 1. 声纹提取器 (最先加载, 其他模块可能依赖) —— 轻量模式下跳过
         if not load_kws_only:

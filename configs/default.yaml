@@ -62,9 +62,9 @@ separation:
   # SpEx+ 最佳实验参数；仅约束分离后结果，不改变其他模型参数。
   enable: true
   max_speakers: 2              # 比赛说明: 同一时间最多2个说话人
-  vp_threshold_separated: 0.2805
+  vp_threshold_separated: 0.40
   sep_trigger_min: 0.0
-  sim_jump_cap: 0.3
+  sim_jump_cap: 0.25
   # 以下两个开关在自适应模式下忽略 (保留供非自适应实验):
   voiceprint_use_separated: false # (自适应模式下忽略)
   asr_use_separated: true         # (自适应模式下忽略)
@@ -87,10 +87,9 @@ voiceprint:
   #       ECAPA-TDNN (SpeechBrain, 需 HuggingFace)
   model: ensemble
   ensemble:
-    # 三模型 Z-score 加权融合, datasetA 最优方案
-    # 80分=59.33, 100分=74.58, CER=0.4365, RR=0.9198
-    weights: [0.4, 0.4, 0.2]    # CAM++ / ERes2NetV2 / ResNetSE
-    threshold: -0.17            # Z-score 空间阈值
+    # [2026-08-18] 组员最优参数: 三模型 Z-score 加权融合
+    weights: [0.4, 0.35, 0.25]  # CAM++ / ERes2NetV2 / ResNetSE
+    threshold: -0.22            # Z-score 空间阈值
   ecapa_tdnn:
     huggingface_repo: speechbrain/spkrec-ecapa-voxceleb
     embedding_dim: 192
@@ -98,18 +97,19 @@ voiceprint:
     # 3DSpeaker 框架, 需安装 modelscope
     model_id: iic/speech_campplus_sv_zh-cn_16k-common
     embedding_dim: 192
-    finetuned_path: null
+    finetuned_path: runs/camplus_v8_full/camplus_finetuned_best.pt
   eres2netv2:
     # 增强残差网络, 需安装 modelscope
     model_id: iic/speech_eres2netv2_sv_zh-cn_16k-common
     embedding_dim: 192
+    finetuned_path: runs/eres2netv2_v8_full/camplus_finetuned_best.pt
   resnetse:
     # WeSpeaker ResNet34, sherpa-onnx 推理, CN-Celeb 训练
     model_path: pretrained/wespeaker_resnet34/wespeaker_zh_cnceleb_resnet34.onnx
     num_threads: 4
     embedding_dim: 256
   # 单模型模式下的鉴别阈值 (ensemble 模式使用 ensemble.threshold)
-  threshold: 0.28
+  threshold: 0.32
   enable: true
 
 # ===========================================================================

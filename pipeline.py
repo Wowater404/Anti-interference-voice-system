@@ -382,7 +382,9 @@ class VoicePipeline:
         sep_input = sep_audio if sep_audio is not None else audio
         is_english = any(c.isalpha() and ord(c) < 128 for c in kws_text)
         # 语言优先级: 纯英文词→英文先; 含中文词→中文先 (混合词双模式顺序无影响)
-        lang_order = ("英文", "中文") if is_english else ("中文", "英文")
+        # [2026-08-18] 省时优化: 纯中文唤醒词不补英文模式 (Nano 英文模式识别纯中文
+        # 输出英文/乱码, 相似度极低, 补跑基本无益; 未命中直接走盲分离)。
+        lang_order = ("英文", "中文") if is_english else ("中文",)
 
         def _match_lang(seg, lang):
             old = getattr(self.asr, "language", None)
@@ -485,6 +487,11 @@ class VoicePipeline:
           kws_asr (Paraformer, 0.26s) 快识别 → 词汇判据可靠则直接用;
           不可靠 → 主 asr (Nano, 0.84s) 复核, 保 CER。
         预期: cmd 平均 0.64*0.26 + 0.36*0.84 ≈ 0.47s, 整体 CER 由 Nano 兜底。
+
+        [2026-08-18] 修复 Nano 语言模式泄漏 bug:
+        kws 匹配 (_match_lang) 会切换 asr.language (英文样本切"英文"),
+        若恢复不彻底, 指令识别用英文模式识别中文指令 → 完全无关的乱码输出
+        (实测"风向右吹"→"nowhosinourviewthere" CER 5.0)。这里显式锁定中文。
         """
         if self.kws_asr is not None:  # kws_asr 为 Paraformer (快)
             try:
@@ -493,7 +500,14 @@ class VoicePipeline:
                 text = ""
             if self._instruct_reliable(text):
                 return text
-        return strip_punctuation(self.asr.transcribe(audio, sr))
+        _old_lang = getattr(self.asr, "language", None)
+        try:
+            if _old_lang:
+                self.asr.language = "中文"
+            return strip_punctuation(self.asr.transcribe(audio, sr))
+        finally:
+            if _old_lang:
+                self.asr.language = _old_lang
 
     def _text_sim(self, a: str, b: str) -> float:
         """字符相似度 = 1 - CER, 范围 [0,1]; 空串返回 0"""

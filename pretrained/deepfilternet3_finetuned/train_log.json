@@ -1,0 +1,39 @@
+{
+  "args": {
+    "data_dir": "F:/龙虾/2026-07-18-13-57-00/df3_finetune/data",
+    "out_dir": "F:/龙虾/2026-07-18-13-57-00/voice_pipeline/pretrained/deepfilternet3_finetuned",
+    "epochs": 3,
+    "steps_per_epoch": 400,
+    "val_steps": 50,
+    "lr": 0.0001,
+    "batch": 1,
+    "weight_decay": 0.05,
+    "seed": 42
+  },
+  "epochs": [
+    {
+      "epoch": 0,
+      "train_loss": 1.0782621444948017,
+      "val_sisdr_noisy": 7.91126858972013,
+      "val_sisdr_enh": 21.87635040283203,
+      "sisdr_improve": 13.965081813111901,
+      "time_s": 53.9
+    },
+    {
+      "epoch": 1,
+      "train_loss": 1.1278853442519903,
+      "val_sisdr_noisy": 7.90014687910676,
+      "val_sisdr_enh": 21.969714546203612,
+      "sisdr_improve": 14.069567667096852,
+      "time_s": 53.2
+    },
+    {
+      "epoch": 2,
+      "train_loss": 1.0269462649337948,
+      "val_sisdr_noisy": 8.008411502242089,
+      "val_sisdr_enh": 21.80227297782898,
+      "sisdr_improve": 13.793861475586892,
+      "time_s": 54.2
+    }
+  ]
+}

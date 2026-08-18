@@ -76,7 +76,10 @@ class PipelineConfig:
             try:
                 import torch
                 if torch.cuda.is_available():
-                    return "cuda"
+                    # [2026-08-18] 返回带设备号的标准格式 "cuda:N"。
+                    # 之前返回 "cuda" (无 :N) 会让部分库 (modelscope/sherpa) 解析失败,
+                    # 警告 "Could not parse CUDA device string 'cuda'" 后 fallback。
+                    return f"cuda:{torch.cuda.current_device()}"
             except ImportError:
                 pass
             return "cpu"

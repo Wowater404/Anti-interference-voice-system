@@ -107,16 +107,16 @@ class VoicePipeline:
         # [2026-08-15] 能量法预检: 盲分离两轨中第二轨能量占比 < 此阈值判为单人
         # (盲分离对单人 kws 产生的是伪影轨, 能量显著低于主轨, 无需各轨匹配)
         self.kws_sep_energy_th = config.separation.get("kws_sep_energy_th", 0.15)
-        # [2026-08-17 V17.1] 省时优化开关:
+        # [2026-08-17 V17.1] 省时优化开关 (默认 True: 任何 config 克隆后即省时, 想关可在 config 显式 false):
         #   kws_early_stop: 语言早停 (纯中文词只先跑中文模式, 命中即停; 未命中补英文)
         #   kws_energy_gate: 能量法保守版 (判单人→先降噪整体匹配, 命中即停; 未命中再各轨)
         # 两者都保留所有匹配路径 (未命中补跑), 命中率数学上不变, 只省 ASR 调用次数。
-        self.kws_early_stop = config.separation.get("kws_early_stop", False)
-        self.kws_energy_gate = config.separation.get("kws_energy_gate", False)
+        self.kws_early_stop = config.separation.get("kws_early_stop", True)
+        self.kws_energy_gate = config.separation.get("kws_energy_gate", True)
         # [2026-08-17] kws_para_quick: 中文 Paraformer 快筛 (0.26s) 命中即停, 未命中 Nano 复核兜底。
         #   实测 300 中文样本: Paraformer 直接命中 79%, 与 Nano(80.67%)互补,
         #   双 ASR 并集直接命中 85%+ (比纯 Nano 高), 且中文匹配耗时 0.72s→0.39s (省 46%)。
-        self.kws_para_quick = config.separation.get("kws_para_quick", False)
+        self.kws_para_quick = config.separation.get("kws_para_quick", True)
         # [2026-08-15] 指令识别"先轻后重": 指令词表 (从全量 label 标定, 含≥1词判Paraformer输出可靠)
         self._instruct_words = [
             "什么", "调到", "吃什", "模式", "打开", "空调", "播放", "二十", "风速", "到二",
@@ -180,6 +180,21 @@ class VoicePipeline:
         print("=" * 60)
         print("正在加载流水线模型..." + (" (轻量模式: 仅 kws 统计所需)" if load_kws_only else ""))
         print("=" * 60)
+
+        # [2026-08-18] GPU 检测诊断 (组员克隆后 CPU 运行排查):
+        # 所有模型(DF3/声纹/ASR/分离)的 GPU 使用最终都取决于 torch.cuda.is_available()。
+        # 若配置要 GPU 但 torch 是 CPU 版 (pip install torch 默认装 CPU 版),
+        # 所有模型会静默跑 CPU (慢 10-20 倍), 表现为降噪 100ms -> 1.2s。
+        import torch as _torch_diag
+        _cuda_ok = _torch_diag.cuda.is_available()
+        _gpu_name = _torch_diag.cuda.get_device_name(0) if _cuda_ok else "无(CPU)"
+        print(f"[Device] 推理设备: {self.device} | CUDA 可用: {_cuda_ok} | GPU: {_gpu_name}")
+        if self.device != "cpu" and not _cuda_ok:
+            print("⚠️⚠️ 警告: 配置要求 GPU 但 torch 检测不到 CUDA, 所有模型将跑 CPU (慢 10-20 倍)!")
+            print("  原因: PyTorch 是 CPU 版 (pip install torch 默认装 CPU 版, 不带 CUDA 支持)")
+            print("  修复: pip install torch --index-url https://download.pytorch.org/whl/cu121")
+            print("  验证: python -c \"import torch; print(torch.cuda.is_available())\" 应输出 True")
+            print("  若已有 NVIDIA 驱动, 也可用 conda 安装: conda install pytorch pytorch-cuda -c pytorch -c nvidia")
 
         # 按依赖顺序加载
         # 1. 声纹提取器 (最先加载, 其他模块可能依赖) —— 轻量模式下跳过

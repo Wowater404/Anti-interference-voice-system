@@ -113,6 +113,11 @@ class VoicePipeline:
         # 两者都保留所有匹配路径 (未命中补跑), 命中率数学上不变, 只省 ASR 调用次数。
         self.kws_early_stop = config.separation.get("kws_early_stop", True)
         self.kws_energy_gate = config.separation.get("kws_energy_gate", True)
+        # [2026-08-19] 英文唤醒词能量法把关分离 (实测 571 条英文 kws: 命中率 81.26%→92.47%,
+        #   +11.21pp, 找回 64 条, 0 损失; 触发分离仅 17.9%):
+        #   英文未命中 → 分离 → 能量法判单人→降噪整体匹配(快) / 判多人→各轨匹配(找回)。
+        #   历史: 英文全部分离有害(54.4%<63.3%); 能量法把关只对疑似多人声的英文 kws 分离。
+        self.kws_english_sep_gate = config.separation.get("kws_english_sep_gate", True)
         # [2026-08-17] kws_para_quick: 中文 Paraformer 快筛 (0.26s) 命中即停, 未命中 Nano 复核兜底。
         #   实测 300 中文样本: Paraformer 直接命中 79%, 与 Nano(80.67%)互补,
         #   双 ASR 并集直接命中 85%+ (比纯 Nano 高), 且中文匹配耗时 0.72s→0.39s (省 46%)。
@@ -428,10 +433,11 @@ class VoicePipeline:
         if match_fn(audio) >= self.kws_trigger_sim:
             return sep_input, meta, True
 
-        # 2. 英文唤醒词不盲分离 (8-14 定稿: 盲分离对英文有害 整体 54.4% < 63.3%)
-        #    [2026-08-17] 之前 V17 误把英文也盲分离了, 导致命中率掉 2pp。
-        #    8-14 最终定稿明确 "中文盲分离(多人声) + 英文不盲分离"。
-        if is_english:
+        # 2. 英文唤醒词 [2026-08-19] 能量法把关 (kws_english_sep_gate=True 时):
+        #    未命中 → 落到第 3 步分离流程 → 能量法判单人→降噪整体匹配(快, 等同不分离)
+        #    / 判多人→各轨匹配(找回)。仅对疑似多人声的英文 kws 分离。
+        #    历史: 英文全部分离有害 (54.4% < 63.3%); 把关版只分离少数疑似多人样本。
+        if is_english and not self.kws_english_sep_gate:
             return sep_input, meta, False
 
         # 3. 中文未命中 → 盲分离 → 各轨匹配选最高分 (V12 全量方案, 8-14 定稿)
@@ -1179,4 +1185,160 @@ class VoicePipeline:
             },
         }
 
+        return submission
+
+    def infer_test_jsonl(self, jsonl_path: str, out_path: Optional[str] = None) -> Dict:
+        """
+        测试集 B 推理 (2026-08-19 新增, 适配官方 test.jsonl 格式)
+
+        测试集 jsonl 样例 (不分 pos/neg, 无识别文本标签):
+          {"id": 0, "唤醒音频": "test/kws_0.wav", "唤醒文本": "你好科慕", "识别音频": "test/cmd_0.wav"}
+
+        流程 (与 process_dataset_ensemble 的 Phase 1-3 完全一致):
+          Phase 1: 降噪 + 三模型声纹 + kws 匹配 + 自适应分离 (无标签依赖)
+          Phase 2: Z-score 批量归一化 + 加权融合 + 阈值判定 (固定 ens.threshold, 不扫描)
+          Phase 3: ASR 识别 (仅接受样本)
+          Phase 4: 输出提交格式 {"result": {"results": [{"id", "content"}], "duration"}}
+
+        Args:
+            jsonl_path: test.jsonl 路径 (音频路径相对其所在目录)
+            out_path: 可选, 提交 JSON 输出路径
+
+        Returns:
+            submission dict
+        """
+        if not self._models_loaded:
+            self.load_models()
+        assert self.is_ensemble, "测试集推理需要 ensemble 模式"
+
+        total_start = time.time()
+        ens = self.voiceprint_extractor
+        sr = self.config.sample_rate
+        data_root = os.path.dirname(os.path.abspath(jsonl_path))
+
+        # === 1. 读样本 (单一 jsonl, 不区分 pos/neg) ===
+        samples = []
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                if line.strip():
+                    rec = json.loads(line)
+                    rec["_idx"] = i
+                    samples.append(rec)
+        print(f"\n[Test] 共 {len(samples)} 条测试样本 (jsonl: {os.path.basename(jsonl_path)})")
+
+        # === Phase 1: 降噪 + 声纹提取 + kws 匹配 + 自适应分离 ===
+        print("\n[Phase 1] 降噪 + 三模型声纹提取...")
+        raw_sims = []
+        denoised_audios = []
+        sample_ids = []
+        for i, sample in enumerate(samples):
+            kws_path = os.path.join(data_root, sample["唤醒音频"])
+            cmd_path = os.path.join(data_root, sample["识别音频"])
+            kws_text = sample.get("唤醒文本", None)
+
+            kws_audio, _ = load_wav(kws_path, sr)
+            cmd_audio, _ = load_wav(cmd_path, sr)
+
+            denoised = self.denoiser.denoise(cmd_audio, sr)
+            den_cam, den_eres, den_rnet = ens.extract_all(denoised, sr)
+
+            kws_processed, _, _, kws_all = self._process_kws(kws_audio, kws_text, sr)
+            kws_cam, kws_eres, kws_rnet = kws_all[0], kws_all[1], kws_all[2]
+
+            _w = ens.weights
+            _sim_abs = (_w[0] * ens.cosine_sim(kws_cam, den_cam)
+                        + _w[1] * ens.cosine_sim(kws_eres, den_eres)
+                        + _w[2] * ens.cosine_sim(kws_rnet, den_rnet))
+
+            # 自适应分离 (低置信样本, 与 process_dataset_ensemble 一致)
+            if (self.separation_enabled and self.separator is not None
+                    and self.sep_trigger_min <= _sim_abs < self.vp_threshold):
+                _sep_result = {"audio": None, "sources": None, "ok": False}
+                def _do_sep():
+                    try:
+                        self.separator.set_reference_audio(kws_processed, sr)
+                        _sep_result["audio"], _sep_result["sources"] = self.separator.separate(denoised, sr)
+                        _sep_result["ok"] = True
+                    except Exception as _e:
+                        print(f"  [分离异常] id={sample.get('id')}: {_e}", flush=True)
+                        _sep_result["audio"] = None
+                import threading
+                _t = threading.Thread(target=_do_sep, daemon=True)
+                _t.start()
+                _t.join(timeout=60)
+                if _t.is_alive():
+                    print(f"  [分离超时] id={sample.get('id')}, 跳过分离", flush=True)
+                elif _sep_result["ok"] and _sep_result["audio"] is not None and len(_sep_result["audio"]) > 0:
+                    sources = _sep_result.get("sources") or [_sep_result["audio"]]
+                    best_audio = denoised
+                    best_sim = _sim_abs
+                    sep_improved = False
+                    for src in sources:
+                        if src is None or len(src) == 0:
+                            continue
+                        s_cam, s_eres, s_rnet = ens.extract_all(src, sr)
+                        s_sim = (_w[0] * ens.cosine_sim(kws_cam, s_cam)
+                                 + _w[1] * ens.cosine_sim(kws_eres, s_eres)
+                                 + _w[2] * ens.cosine_sim(kws_rnet, s_rnet))
+                        if s_sim > best_sim and (s_sim - _sim_abs) <= self.sim_jump_cap:
+                            best_sim = s_sim
+                            best_audio = src
+                            sep_improved = True
+                    if sep_improved:
+                        denoised = best_audio
+                        den_cam, den_eres, den_rnet = ens.extract_all(denoised, sr)
+
+            cam_sim = ens.cosine_sim(kws_cam, den_cam)
+            eres_sim = ens.cosine_sim(kws_eres, den_eres)
+            rnet_sim = ens.cosine_sim(kws_rnet, den_rnet)
+
+            raw_sims.append((cam_sim, eres_sim, rnet_sim))
+            denoised_audios.append(denoised)
+            sample_ids.append(str(sample.get("id", i)))
+
+            if (i + 1) % 50 == 0 or i == len(samples) - 1:
+                elapsed = time.time() - total_start
+                print(f"  [{i+1}/{len(samples)}] 已用 {elapsed:.1f}s", flush=True)
+
+        # === Phase 2: Z-score 判定 (固定阈值, 不扫描) ===
+        print("\n[Phase 2] Z-score 归一化 + 融合...")
+        fused_sims = EnsembleVoiceprintExtractor.zscore_fuse(raw_sims, ens.weights)
+        accept_flags = fused_sims >= ens.threshold
+        n_accept = int(accept_flags.sum())
+        print(f"  阈值: {ens.threshold} (Z-score) | 接受: {n_accept}, 拒识: {len(accept_flags) - n_accept}")
+
+        # === Phase 3: ASR (仅接受样本) ===
+        print("\n[Phase 3] ASR 识别...")
+        results = []
+        asr_count = 0
+        for i, sample in enumerate(samples):
+            is_accepted = bool(accept_flags[i])
+            if is_accepted:
+                asr_audio = normalize_audio(denoised_audios[i])
+                asr_audio = trim_silence(asr_audio, threshold=0.005)
+                text = self._recognize_instruct(asr_audio, sr)
+                text = strip_punctuation(text)
+                text = normalize_digits(text)
+                asr_count += 1
+            else:
+                text = ""
+            results.append({"id": sample_ids[i], "content": text})
+            if (asr_count % 10 == 0 and asr_count > 0) or i == len(samples) - 1:
+                elapsed = time.time() - total_start
+                print(f"  [{i+1}/{len(samples)}] ASR已跑 {asr_count} 条, 已用 {elapsed:.1f}s", flush=True)
+
+        # === Phase 4: 提交格式 ===
+        total_duration = time.time() - total_start
+        submission = {
+            "result": {
+                "results": results,
+                "duration": f"{total_duration:.2f}",
+            },
+        }
+        if out_path:
+            os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(submission, f, ensure_ascii=False, indent=2)
+            print(f"\n[Test] 推理完成, 提交文件 -> {out_path}")
+        print(f"[Test] 总耗时 {total_duration:.1f}s → {total_duration/len(samples):.2f}s/条")
         return submission

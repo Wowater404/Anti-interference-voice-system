@@ -51,6 +51,7 @@ separation:
   kws_early_stop: true         # 语言早停: 纯英文词英文先跑命中即停, 含中文词中文先跑; 未命中补跑另一语言
   kws_energy_gate: true        # 能量法保守版: 判单人→先降噪整体匹配命中即停, 未命中再各轨 (保留全部路径)
   kws_para_quick: true         # 中文 Paraformer 快筛(0.26s)命中即停, 未命中 Nano 复核; 双 ASR 并集命中率更高且省 46% 时间
+  kws_english_sep_gate: true   # [2026-08-19] 英文唤醒词能量法把关分离: 实测命中率 81.26%→92.47% (+11.21pp, 找回64/0损失), 只对 17.9% 疑似多人声分离
 voiceprint:
   model: ensemble
   ensemble:

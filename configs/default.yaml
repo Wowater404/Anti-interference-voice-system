@@ -77,6 +77,7 @@ separation:
   kws_early_stop: true         # 语言早停: 命中即停, 省一半 ASR
   kws_energy_gate: true        # 能量法保守版: 判单人先降噪整体匹配
   kws_para_quick: true         # 中文 Paraformer 快筛 (0.26s 代替 Nano 0.86s)
+  kws_english_sep_gate: true   # [2026-08-19] 英文唤醒词能量法把关分离 (实测命中率 +11.21pp, 0 损失)
 
 # ===========================================================================
 # Stage 3: 声纹鉴别

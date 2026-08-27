@@ -1,0 +1,102 @@
+device=cuda, aug=ON, batch=64, out=D:/pycode/V17.1/runs/sv_aug_run4
+train: 2500 对 (pos=1211, neg=1289), val: 800 对
+  RawStore: 6085 个唯一音频, 上限 20000
+  RawStore 加载完成: 6085 条, 耗时 2s
+  噪声池: 1200 条 (来自 D:/mobvoi_dataset/mobvoi_subset/wav)
+2026-08-26 21:50:11,695 | INFO    | modelscope_hub.download | Downloading 9 files from iic/speech_eres2netv2_sv_zh-cn_16k-common@master
+Downloading:   0%|          | 0/9 [00:00<?, ?file/s]Downloading: 100%|██████████| 9/9 [00:00<00:00, 162.98file/s]
+2026-08-26 21:50:11,758 - modelscope - INFO - initiate model from D:\pycode\V17.1\pretrained\modelscope_cache\models\iic--speech_eres2netv2_sv_zh-cn_16k-common\snapshots\master
+2026-08-26 21:50:11,758 - modelscope - INFO - initiate model from location D:\pycode\V17.1\pretrained\modelscope_cache\models\iic--speech_eres2netv2_sv_zh-cn_16k-common\snapshots\master.
+2026-08-26 21:50:11,911 - modelscope - INFO - initialize model from D:\pycode\V17.1\pretrained\modelscope_cache\models\iic--speech_eres2netv2_sv_zh-cn_16k-common\snapshots\master
+2026-08-26 21:50:12,064 - modelscope - WARNING - Use allow_remote=True. Will invoke codes from D:\pycode\V17.1\pretrained\modelscope_cache\models\iic--speech_eres2netv2_sv_zh-cn_16k-common\snapshots\master. Please make sure that you can trust the external codes.
+D:\pycode\V17\.venv\Lib\site-packages\torch\nn\modules\module.py:1370: UserWarning: expandable_segments not supported on this platform (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\pytorch\c10/cuda/CUDAAllocatorConfig.h:39.)
+  return t.to(
+2026-08-26 21:50:12,703 - modelscope - WARNING - No preprocessor field found in cfg.
+2026-08-26 21:50:12,703 - modelscope - WARNING - No val key and type key found in preprocessor domain of configuration.json file.
+2026-08-26 21:50:12,703 - modelscope - WARNING - Cannot find available config to build preprocessor at mode inference, current config: {'model_dir': 'D:\\pycode\\V17.1\\pretrained\\modelscope_cache\\models\\iic--speech_eres2netv2_sv_zh-cn_16k-common\\snapshots\\master'}. trying to build by task and model information.
+2026-08-26 21:50:12,703 - modelscope - INFO - No preprocessor key ('eres2netv2-sv', 'speaker-verification') found in PREPROCESSOR_MAP, skip building preprocessor. If the pipeline runs normally, please ignore this log.
+  冻结参数: 0.52M, 可训练参数: 17.34M, BN设eval: 89层
+[基线] val EER=0.1163 @thr=0.395, pos_sim=0.516, neg_sim=0.233
+平衡采样: pos=1211, neg=1289, 每步各32
+  [E1 step 2] loss=0.3821
+  [E1 step 4] loss=0.3392
+  [E1 step 6] loss=0.3679
+  [E1 step 8] loss=0.3395
+  [E1 step 10] loss=0.3790
+  [E1 step 12] loss=0.3442
+  [E1 step 14] loss=0.2740
+  [E1 step 16] loss=0.2537
+  [E1 step 18] loss=0.2488
+  [E1 step 20] loss=0.3144
+  [E1 step 22] loss=0.2923
+  [E1 step 24] loss=0.2589
+  [E1 step 26] loss=0.2360
+  [E1 step 28] loss=0.2172
+  [E1 step 30] loss=0.2051
+  [E1 step 32] loss=0.2129
+  [E1 step 34] loss=0.2065
+  [E1 step 36] loss=0.2375
+[E1/4] loss=0.2875 val_EER=0.1337@thr=0.745 pos=0.771 neg=0.628 emb_std=0.0529 ★BEST (2161s)
+[mem] allocated=306MB reserved=719MB
+  [E2 step 2] loss=0.2186
+  [E2 step 4] loss=0.2031
+  [E2 step 6] loss=0.1715
+  [E2 step 8] loss=0.1635
+  [E2 step 10] loss=0.2216
+  [E2 step 12] loss=0.2093
+  [E2 step 14] loss=0.1930
+  [E2 step 16] loss=0.1715
+  [E2 step 18] loss=0.1690
+  [E2 step 20] loss=0.1735
+  [E2 step 22] loss=0.1787
+  [E2 step 24] loss=0.1763
+  [E2 step 26] loss=0.1038
+  [E2 step 28] loss=0.1543
+  [E2 step 30] loss=0.1184
+  [E2 step 32] loss=0.1184
+  [E2 step 34] loss=0.1477
+  [E2 step 36] loss=0.1378
+[E2/4] loss=0.1730 val_EER=0.1300@thr=0.665 pos=0.728 neg=0.519 emb_std=0.0608 ★BEST (1074s)
+[mem] allocated=306MB reserved=738MB
+  [E3 step 2] loss=0.1335
+  [E3 step 4] loss=0.1751
+  [E3 step 6] loss=0.1054
+  [E3 step 8] loss=0.1533
+  [E3 step 10] loss=0.1387
+  [E3 step 12] loss=0.1790
+  [E3 step 14] loss=0.1292
+  [E3 step 16] loss=0.1245
+  [E3 step 18] loss=0.1317
+  [E3 step 20] loss=0.1017
+  [E3 step 22] loss=0.0878
+  [E3 step 24] loss=0.1794
+  [E3 step 26] loss=0.1536
+  [E3 step 28] loss=0.1001
+  [E3 step 30] loss=0.1146
+  [E3 step 32] loss=0.1360
+  [E3 step 34] loss=0.1394
+  [E3 step 36] loss=0.1385
+[E3/4] loss=0.1265 val_EER=0.1575@thr=0.715 pos=0.762 neg=0.585 emb_std=0.0598  (1651s)
+[mem] allocated=307MB reserved=738MB
+  [E4 step 2] loss=0.1126
+  [E4 step 4] loss=0.1108
+  [E4 step 6] loss=0.0661
+  [E4 step 8] loss=0.0732
+  [E4 step 10] loss=0.1080
+  [E4 step 12] loss=0.1115
+  [E4 step 14] loss=0.0957
+  [E4 step 16] loss=0.1140
+  [E4 step 18] loss=0.1026
+  [E4 step 20] loss=0.1256
+  [E4 step 22] loss=0.0819
+  [E4 step 24] loss=0.0716
+  [E4 step 26] loss=0.0856
+  [E4 step 28] loss=0.0674
+  [E4 step 30] loss=0.1086
+  [E4 step 32] loss=0.1192
+  [E4 step 34] loss=0.1004
+  [E4 step 36] loss=0.0832
+[E4/4] loss=0.1045 val_EER=0.1562@thr=0.720 pos=0.770 neg=0.596 emb_std=0.0581  (952s)
+[mem] allocated=307MB reserved=738MB
+损失曲线已保存: D:/pycode/V17.1/runs/sv_aug_run4/loss_curve.png
+训练完成. 基线EER=0.1163 → 最佳EER=0.1300, 权重: D:/pycode/V17.1/runs/sv_aug_run4/sv_aug_best.pt

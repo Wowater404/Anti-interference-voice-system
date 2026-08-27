@@ -1,0 +1,76 @@
+{
+  "args": {
+    "data_root": "D:/声纹训练包_5.5h_v2/声纹训练包_5.5h_v2/声纹训练包_5.5h",
+    "train_jsonl": "D:/pycode/V17.1/runs/sv_aug_smoke/himia_train_sub.jsonl",
+    "val_jsonl": "D:/pycode/V17.1/runs/sv_aug_smoke/himia_val_sub.jsonl",
+    "noise_dir": "D:/mobvoi_dataset/mobvoi_subset/wav",
+    "no_aug": false,
+    "bg_prob": 0.7,
+    "bg_snr_min": -5.0,
+    "bg_snr_max": 10.0,
+    "sp_prob": 0.5,
+    "sp_snr_min": 0.0,
+    "sp_snr_max": 12.0,
+    "noise_max": 1200,
+    "epochs": 4,
+    "lr": 0.0001,
+    "batch": 64,
+    "pos_margin": 0.7,
+    "neg_margin": 0.3,
+    "workers": 4,
+    "log_every": 2,
+    "max_samples_memory": 20000,
+    "init_from": null,
+    "resume": false,
+    "save_every_steps": 200,
+    "gpu_mem_frac": 0,
+    "out_dir": "D:/pycode/V17.1/runs/sv_aug_run4"
+  },
+  "baseline_eer": 0.11625,
+  "epochs": [
+    {
+      "epoch": 1,
+      "loss": 0.28747526616663543,
+      "val_eer": 0.13374999999999998,
+      "val_thr": 0.745,
+      "pos_sim": 0.7712737564370036,
+      "neg_sim": 0.6277105177938939,
+      "emb_std": 0.05291431397199631,
+      "time_s": 2161.0,
+      "best": true
+    },
+    {
+      "epoch": 2,
+      "loss": 0.17302980535739176,
+      "val_eer": 0.13,
+      "val_thr": 0.665,
+      "pos_sim": 0.7283280901610851,
+      "neg_sim": 0.5187249314785004,
+      "emb_std": 0.06080588698387146,
+      "time_s": 1074.4,
+      "best": true
+    },
+    {
+      "epoch": 3,
+      "loss": 0.12652293854468577,
+      "val_eer": 0.1575,
+      "val_thr": 0.715,
+      "pos_sim": 0.7623058065772057,
+      "neg_sim": 0.5850785134360195,
+      "emb_std": 0.05976986885070801,
+      "time_s": 1651.4,
+      "best": false
+    },
+    {
+      "epoch": 4,
+      "loss": 0.1045013269459879,
+      "val_eer": 0.15625,
+      "val_thr": 0.72,
+      "pos_sim": 0.7696988555788994,
+      "neg_sim": 0.5956028358638287,
+      "emb_std": 0.058142226189374924,
+      "time_s": 951.7,
+      "best": false
+    }
+  ]
+}

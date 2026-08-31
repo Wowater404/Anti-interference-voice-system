@@ -1,0 +1,185 @@
+# ===========================================================================
+# 抗干扰语音指令识别流水线 - 配置文件 V3
+# 项目: XH-202615 复杂交互场景的抗干扰语音指令识别技术
+# ===========================================================================
+
+# 音频参数 (datasetA 统一格式)
+audio:
+  sample_rate: 16000          # 采样率 16kHz
+  mono: true                  # 单声道
+  sample_width: 2             # 16-bit PCM
+  format: wav
+
+# ===========================================================================
+# Stage 1: 降噪模型
+# ===========================================================================
+denoise:
+  # [2026-08-16] V16 默认降噪: DeepFilterNet3 微调权重 (atten_lim_db=4, post_filter=False)
+  # 微调: LibriSpeech clean + DEMAND 噪声, SI-SDR +8.0→+14.9dB, 优于预训练。
+  model: deepfilternet3
+  enable: true
+  deepfilternet3:
+    model_dir: pretrained/deepfilternet3_finetuned  # 微调权重 (V16)
+    atten_lim_db: 4           # 最大衰减 dB (用户选定参数)
+    post_filter: false        # 后处理滤波
+  renoise:
+    stationary: false           # 自适应噪声估计 (调参最优)
+    prop_decrease: 0.8          # 噪声抑制比例 (0-1, 越大抑制越多)
+    n_std_thresh: 1.5           # 阈值标准差倍数 (越高越保守)
+    n_fft: 1024                 # FFT 点数
+  # 备选模型 (保留参考)
+  gtcrn:
+    checkpoint: dns3           # dns3 (通用噪声) 或 vctk (人声)
+    n_fft: 512                 # STFT 帧长
+    hop_length: 256            # STFT 帧移
+  fullsubnet_plus:
+    checkpoint: null           # 指定本地 checkpoint 路径
+  enable: true
+
+# ===========================================================================
+# Stage 2: 人声分离 / 目标说话人提取
+# ===========================================================================
+separation:
+  # 最终选择：SpEx+ 16kHz目标说话人提取模型。
+  # 每条样本以对应的唤醒音频作为目标说话人参考。
+  model: spex_plus
+  sepformer16k:
+    # SpeechBrain 预训练模型, 2-speaker separation at 16kHz
+    huggingface_repo: speechbrain/sepformer-whamr16k
+    # WHAMR 数据集: WSJ0-Mix + 噪声 + 混响, 16kHz
+    # SI-SNRi: 13.5 dB, SDRi: 13.0 dB
+  sepformer:
+    # 8kHz 版本 (已弃用, 降采样导致音质降级)
+    huggingface_repo: speechbrain/sepformer-libri2mix
+    sample_rate: 8000          # 原生 8kHz, 需重采样
+  spex_plus:
+    checkpoint: pretrained/spex_plus_finetuned/checkpoint.pth
+    sample_rate: 16000
+    num_spks: 90
+    expected_sha256: null  # finetuned 权重 (aishell1max) 无官方 sha256, 关闭校验
+    # 权重缺失或校验失败时直接停止，禁止静默退化为直通模式。
+    allow_fallback: false
+  # SpEx+ 最佳实验参数；仅约束分离后结果，不改变其他模型参数。
+  enable: true
+  max_speakers: 2              # 比赛说明: 同一时间最多2个说话人
+  vp_threshold_separated: 0.40
+  sep_trigger_min: 0.0
+  sim_jump_cap: 0.25
+  # 以下两个开关在自适应模式下忽略 (保留供非自适应实验):
+  voiceprint_use_separated: false # (自适应模式下忽略)
+  asr_use_separated: true         # (自适应模式下忽略)
+  # V9: kws 自适应盲分离
+  kws_enable: true             # 是否对 kws 做降噪+自适应盲分离
+  kws_trigger_sim: 0.5         # 降噪后唤醒词 ASR 匹配度低于此值才触发盲分离
+  # [2026-08-18] V17.1 省时优化 (与 verify_dual_full.yaml 对齐, 默认启用):
+  # 组员 clone 后无需手动改配置, 直接跑就是省时版。
+  kws_sep_energy_th: 0.3       # 能量法判单人阈值
+  kws_early_stop: true         # 语言早停: 命中即停, 省一半 ASR
+  kws_energy_gate: true        # 能量法保守版: 判单人先降噪整体匹配
+  kws_para_quick: true         # 中文 Paraformer 快筛 (0.26s 代替 Nano 0.86s)
+  kws_english_sep_gate: true   # [2026-08-19] 英文唤醒词能量法把关分离 (实测命中率 +11.21pp, 0 损失)
+
+# ===========================================================================
+# Stage 3: 声纹鉴别
+# ===========================================================================
+voiceprint:
+  # 主选: 3-model Z-score Ensemble (CAM++ + ERes2NetV2 + ResNetSE)
+  # 备选: CAM++ / ERes2NetV2 / ResNetSE (单模型)
+  #       ECAPA-TDNN (SpeechBrain, 需 HuggingFace)
+  model: ensemble
+  ensemble:
+    # [2026-08-18] 组员最优参数: 三模型 Z-score 加权融合
+    weights: [0.4, 0.35, 0.25]  # CAM++ / ERes2NetV2 / ResNetSE
+    threshold: -0.22            # Z-score 空间阈值
+  ecapa_tdnn:
+    huggingface_repo: speechbrain/spkrec-ecapa-voxceleb
+    embedding_dim: 192
+  cam_plus:
+    # 3DSpeaker 框架, 需安装 modelscope
+    model_id: iic/speech_campplus_sv_zh-cn_16k-common
+    embedding_dim: 192
+    finetuned_path: runs/camplus_v8_full/camplus_finetuned_best.pt
+  eres2netv2:
+    # 增强残差网络, 需安装 modelscope
+    model_id: iic/speech_eres2netv2_sv_zh-cn_16k-common
+    embedding_dim: 192
+    finetuned_path: runs/eres2netv2_v8_full/camplus_finetuned_best.pt
+  resnetse:
+    # WeSpeaker ResNet34, sherpa-onnx 推理, CN-Celeb 训练
+    model_path: pretrained/wespeaker_resnet34/wespeaker_zh_cnceleb_resnet34.onnx
+    num_threads: 4
+    embedding_dim: 256
+  # 单模型模式下的鉴别阈值 (ensemble 模式使用 ensemble.threshold)
+  threshold: 0.32
+  enable: true
+
+# ===========================================================================
+# Stage 4: 语音识别 (ASR)
+# ===========================================================================
+asr:
+  # 主选: Fun-ASR-Nano-2512 (FunAudioLLM) — 自回归 LLM, 中文识别 SOTA
+  # 备选: Paraformer (FunASR) — 非自回归, 速度快
+  #       SenseVoice (ModelScope/iic) — 非自回归极速推理
+  #       Whisper (OpenAI) — 多语言, 鲁棒性好但较慢
+  #       SherpaONNX — ONNX 推理, 极轻量
+  model: fun_asr_nano
+  fun_asr_nano:
+    # Fun-ASR-Nano-2512: SenseVoice 编码器 + Qwen3-0.6B LLM 解码器, 800M 参数
+    # 不支持 batch decoding, 必须用 batch_size=1
+    # hotwords=None 会崩溃, 设为 null 时不传 hotwords 参数
+    model_dir: FunAudioLLM/Fun-ASR-Nano-2512
+    language: 中文
+    hotwords: null               # null = 禁用热词 (热词会降低准确率)
+    device: cuda:0               # GPU 加速 (无 GPU 时自动回退 cpu)
+  sensevoice:
+    model_id: iic/SenseVoiceSmall
+    vad_model: fsmn-vad
+    language: zh
+    use_itn: false
+  paraformer:
+    model_name: paraformer-zh
+    vad_model: fsmn-vad
+    punc_model: ct-punc
+    hotwords: "空调,洗碗机,灯光,风量,制热,暂停,音量"
+  # [2026-08-18] kws 中文快匹配专用 ASR (Paraformer): 与 verify_dual_full.yaml 对齐。
+  # kws_para_quick=true 时用它做中文快筛 (0.26s), 英文用主 asr (Nano)。
+  kws_asr:
+    enable: true
+    model: paraformer
+    model_name: paraformer-zh
+    vad_model: fsmn-vad
+    punc_model: null
+    hotwords: null
+  whisper:
+    model_size: base
+    language: zh
+  sherpa_onnx:
+    encoder: null
+    decoder: null
+  enable: true
+
+# ===========================================================================
+# 数据集路径
+# ===========================================================================
+dataset:
+  pos_jsonl: "pos.jsonl"
+  neg_jsonl: "neg.jsonl"
+  pos_dir: "pos"
+  neg_dir: "neg"
+
+# ===========================================================================
+# 输出配置
+# ===========================================================================
+output:
+  result_dir: "results/spex_plus"
+  save_intermediate: false     # 保存中间音频 (降噪后, 分离后) - 关闭以加速
+  intermediate_dir: "results/spex_plus/intermediate"
+
+# ===========================================================================
+# 推理设备
+# ===========================================================================
+# FAQ#6: 最终测试使用统一GPU环境 (L20-46G显卡)
+# 本地开发: cpu (CUDA版torch未安装)
+# 提交官方: cuda (L20-46G GPU环境)
+# 设为 auto 则自动检测: 有CUDA用CUDA, 无则用CPU
+device: auto
